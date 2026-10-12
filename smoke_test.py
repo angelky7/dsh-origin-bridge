@@ -27,6 +27,21 @@ PY = sys.executable
 STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+class NonStrictJSON(ValueError):
+    """The server wrote bare Infinity/NaN/-Infinity.
+
+    Python's json accepts those, RFC 8259 does not: dsh's client would fail on the
+    whole response and the tool would look dead rather than slightly wrong. A test
+    harness that tolerates it hides a real protocol defect, so we reject it here.
+    """
+
+
+def strict_loads(text):
+    def _reject(const):
+        raise NonStrictJSON("非标准 JSON 常量: %s" % const)
+    return json.loads(text, parse_constant=_reject)
+
+
 class Rpc:
     def __init__(self, python, script):
         self.p = subprocess.Popen([python, "-u", script], cwd=HERE,
@@ -64,7 +79,11 @@ class Rpc:
             with self.lock:
                 for raw in self.lines:
                     try:
-                        msg = json.loads(raw)
+                        msg = strict_loads(raw)
+                    except NonStrictJSON:
+                        # A reply carrying bare Infinity/NaN parses in Python but not
+                        # in a strict client, so dsh would report the tool as dead.
+                        raise SystemExit("服务器写出了非法 JSON：%s" % raw[:160])
                     except ValueError:
                         continue
                     if msg.get("id") == mine:
@@ -82,7 +101,10 @@ class Rpc:
         blocks = res.get("content", [])
         text = "".join(c.get("text", "") for c in blocks if c.get("type") == "text")
         try:
-            payload = json.loads(text)
+            payload = strict_loads(text)
+        except NonStrictJSON as exc:
+            payload = {"ok": False, "code": "bad_payload",
+                       "message": "工具返回体不是合法 JSON（%s）：%s" % (exc, text[:300])}
         except ValueError:
             payload = {"ok": False, "code": "bad_payload", "message": text[:400]}
         payload["_isError"] = res.get("isError", False)

@@ -24,6 +24,7 @@ import asciiio
 import binio
 
 MISSING_SENTINEL = -1.23456789e-300
+_INF = float("inf")
 # Verified against OriginPro 2024 SR1 by exporting each code and looking at the
 # image: 200 line, 201 symbol, 202 line+symbol, 203 column.
 PLOT_CODES = {"line": 200, "scatter": 201, "line_symbol": 202, "column": 203}
@@ -396,13 +397,20 @@ def _graph_of(op, ref):
 
 
 def sanitize(obj):
-    """Origin encodes missing numbers as -1.23456789e-300; never leak that upstream."""
+    """Origin encodes missing numbers as -1.23456789e-300; never leak that upstream.
+
+    +-Infinity belongs here too. json.dumps happily writes a bare ``Infinity``,
+    which is not valid JSON, so a single overflowed fit parameter or a ``1e400``
+    read out of a file would make the whole tool response unparseable for a strict
+    client — the failure looks like "the bridge is broken", not like one bad number.
+    """
     if isinstance(obj, dict):
         return {k: sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [sanitize(v) for v in obj]
-    if isinstance(obj, float) and (obj != obj or abs(obj - MISSING_SENTINEL) < 1e-310):
-        return None
+    if isinstance(obj, float):
+        if obj != obj or obj in (_INF, -_INF) or abs(obj - MISSING_SENTINEL) < 1e-310:
+            return None
     return obj
 
 

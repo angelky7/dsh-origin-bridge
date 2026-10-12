@@ -54,6 +54,7 @@
     "smoke_test.py",
     "edge_checks.py",
     "test_paths.py",
+    "test_json_safety.py",
     "test_asciiio.py",
     "test_binio.py",
     "test_lifecycle.py",

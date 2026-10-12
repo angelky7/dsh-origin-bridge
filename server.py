@@ -607,7 +607,20 @@ def main():
                          "error": {"code": -32603, "message": "internal error: %s" % exc}}
         if reply is None:
             continue
-        stdout.write((json.dumps(reply, ensure_ascii=False, default=str) + "\n").encode("utf-8"))
+        # allow_nan=False is the last line of defence. A bare Infinity/NaN in a
+        # reply is not valid JSON, so a strict client (dsh) fails to parse the
+        # *entire* result rather than one field. If anything still slips through,
+        # answer with a clean JSON-RPC error instead of either killing the session
+        # or writing bytes no client can read.
+        try:
+            line = json.dumps(reply, ensure_ascii=False, default=str, allow_nan=False)
+        except ValueError as exc:
+            _log("reply was not strict JSON (%r) for id=%r" % (exc, reply.get("id")))
+            reply = {"jsonrpc": "2.0", "id": reply.get("id"),
+                     "error": {"code": -32603,
+                               "message": "internal error: 返回值含非 JSON 数值（%s）" % exc}}
+            line = json.dumps(reply, ensure_ascii=False, default=str)
+        stdout.write((line + "\n").encode("utf-8"))
         stdout.flush()
 
 

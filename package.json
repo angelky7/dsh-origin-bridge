@@ -53,6 +53,7 @@
     "fixtures/*.txt",
     "smoke_test.py",
     "edge_checks.py",
+    "test_paths.py",
     "test_asciiio.py",
     "test_binio.py",
     "test_lifecycle.py",

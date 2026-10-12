@@ -34,6 +34,7 @@ FILES = {
     "t_paren_negative.dat": ("utf-8", "x\ty\n1\t(500)\n2\t250\n"),
     "u_overflow.dat": ("utf-8", "x\ty\n1\t1e400\n2\t1.2e308\n"),
     "v_row_labels.dat": ("utf-8", "ch\tV\tI\nCh1\t1.0\t2.0\nCh2\t3.0\t4.0\n"),
+    "w_two_numbers_cell.csv": ("utf-8", "x,y\n1,\"2.5 3.5\"\n2,\"4.0 5.0\"\n"),
 }
 
 

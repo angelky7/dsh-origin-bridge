@@ -224,6 +224,9 @@ _NUM_SRC = r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][+-]?\d+)?"
 _CELL_DL = re.compile(r"^(?:[<>]=?|≥|≤)\s*(%s)$" % _NUM_SRC)          # <0.001, >1e6
 _CELL_PM = re.compile(r"^(%s)\s*(?:±|\+/-|\+-)\s*\d*\.?\d+$" % _NUM_SRC)  # 2.5±0.1
 _CELL_UNIT = re.compile(r"^(%s)\s+\S+$" % _NUM_SRC)                   # "25 mV"
+# Two numbers sharing one cell (a space-aligned dump read with the wrong delimiter)
+# must not be dressed up as "number + unit", or the second one disappears quietly.
+_CELL_TWO = re.compile(r"^(%s)\s+(%s)\s*$" % (_NUM_SRC, _NUM_SRC))
 _CELL_FLAG = re.compile(r"^(%s)[*†‡°\s]+$" % _NUM_SRC)                # "2.5*"
 _CELL_THOUSANDS = re.compile(r"^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")  # "1,234.5"
 # European exports use the comma as the decimal mark, which only parses when the
@@ -236,6 +239,8 @@ CELL_KIND_NOTES = {
     "检测限": "第 %d 列 %r 有 %d 个检测限标记（例如 <0.001），已按边界值代入",
     "不确定度": "第 %d 列 %r 有 %d 个 ± 写法（例如 2.5±0.1），已取中心值",
     "带单位的数": "第 %d 列 %r 有 %d 个数值把单位写在同一格（例如 25 mV），已取数值",
+    "一格两个数": "第 %d 列 %r 有 %d 个格子里挤了两个数（空格分隔），已取第一个；"
+                  "若那本是两列，请把分隔符设为空格或改用制表符/CSV 再导",
     "千分位": "第 %d 列 %r 有 %d 个千分位写法（例如 1,234.5），已去掉分隔逗号",
     "小数逗号": "第 %d 列 %r 有 %d 个用逗号当小数点的写法（例如 0,5），已按小数解析",
     "标记后缀": "第 %d 列 %r 有 %d 个带 * / † 标记的值，已按数值本身代入",
@@ -279,6 +284,13 @@ def cell_number(cell, decimal_comma=False):
     if m:
         value = -abs(_to_float(m.group(1)))
         return (value, "括号负数") if _finite(value) else (None, "溢出")
+    m = _CELL_TWO.match(text)
+    if m:
+        # Checked before "number + unit": "2.5 3.5" is a mis-split column, not a
+        # measurement with a unit, and calling it a unit loses the second number
+        # without ever telling anyone.
+        value = _to_float(m.group(1))
+        return (value, "一格两个数") if _finite(value) else (None, "溢出")
     for rx, kind in ((_CELL_DL, "检测限"), (_CELL_PM, "不确定度"),
                      (_CELL_UNIT, "带单位的数"), (_CELL_FLAG, "标记后缀")):
         m = rx.match(text)

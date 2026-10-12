@@ -188,6 +188,17 @@ check("cell '0,5' with decimal_comma", asciiio.cell_number("0,5", decimal_comma=
       asciiio.cell_number("0,5", decimal_comma=True))
 check("cell '\"2,5\"' quoted", asciiio.cell_number('"2,5"', decimal_comma=True) == (2.5, "小数逗号"),
       asciiio.cell_number('"2,5"', decimal_comma=True))
+check("cell '2.5 3.5' is two numbers, not a unit",
+      asciiio.cell_number("2.5 3.5") == (2.5, "一格两个数"), asciiio.cell_number("2.5 3.5"))
+check("cell '25 mV' stays a unit",
+      asciiio.cell_number("25 mV") == (25.0, "带单位的数"), asciiio.cell_number("25 mV"))
+
+# a mis-split column has to say so instead of quietly dropping every second value
+d = load("w_two_numbers_cell.csv")
+check("two numbers in one cell are reported", any("挤了两个数" in w for w in d["warnings"]),
+      d["warnings"])
+check("the first number of each cell survives",
+      d["columns"][1]["values"] == [2.5, 4.0], d["columns"][1]["values"])
 
 print()
 if fails:

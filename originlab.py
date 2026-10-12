@@ -510,6 +510,127 @@ def _verify_file(path, must_be_image=True, min_bytes=1024):
     return {"ok": ok, "path": path, "bytes": size, "dimensions": dims, "head": head[:8].hex()}
 
 
+# Measured 2026-10-12 against the live bridge: Origin's export filter treats '#'
+# in the filename as a numbering token — asking for 100%_a#b[1].png produced
+# 100%_a1b[1].png (the '#' became "1"), while '%', '[]', spaces and 中文 survive.
+# A trailing space or dot in any component is stripped by Win32 before creation,
+# so isfile() on the literal path we asked for says False while the bytes really
+# are on disk. And a path that carries no real filename (".", "   ", ".png")
+# used to resolve into the process CWD and come back as a dotfile named ".png" —
+# littering the plugin install folder.
+_HASH_RUN = re.compile(r"#+")
+
+
+def _clean_component(part):
+    stripped = part.rstrip(" .")
+    return stripped if stripped else part
+
+
+def _norm_target(path, fmt=None):
+    """Absolute, expanduser'd, and normalised the way Windows will do it anyway."""
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    target = os.path.abspath(os.path.expanduser(raw))
+    drive, rest = os.path.splitdrive(target)
+    target = drive + os.sep.join(_clean_component(p) for p in rest.split(os.sep))
+    base = os.path.basename(target)
+    if not base.split(".")[0].strip(" ."):
+        raise OriginError("bad_path", "路径里没有真正的文件名：%r" % path,
+                          ["给完整的文件名，例如 D:\\out\\图.png",
+                           "只想用默认目录就别传 path"])
+    if os.path.isdir(target):
+        raise OriginError("bad_path", "path 指向一个目录，不是文件：%s" % target,
+                          ["把文件名补上，例如 %s\\figure.png" % target])
+    stem, ext = os.path.splitext(base)
+    if fmt and ext.lower().lstrip(".") != fmt:
+        target = os.path.splitext(target)[0] + "." + fmt
+    return target
+
+
+def _prepare_write(target):
+    """Make the directory and refuse up front what Origin cannot write anyway."""
+    folder = os.path.dirname(target) or "."
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as exc:
+        raise OriginError("bad_path", "输出目录建不出来：%s（%s）" % (folder, exc.strerror or exc),
+                          ["盘符存在吗（例如 Q: 未映射）",
+                           "网络路径要用 \\服务器\\共享\\… 且当前身份有写权限",
+                           "路径里去掉尾部空格或点，Windows 会静默截掉"])
+    if os.path.isdir(target):
+        raise OriginError("bad_path", "path 是一个目录，不是文件：%s" % target,
+                          ["把文件名补上，例如 %s\\figure.png" % target])
+    if os.path.exists(target) and not os.access(target, os.W_OK):
+        raise OriginError("target_locked", "目标文件已存在且不可写（只读或被占用）：%s" % target,
+                          ["去掉只读属性或换文件名", "文件可能正被 Origin/图片查看器占用，先关掉"])
+
+
+def _rel_note(path):
+    """A relative path resolves against the process CWD, which under dsh is the
+    plugin's own install folder — worth saying so instead of littering it."""
+    raw = str(path or "").strip()
+    if raw and not os.path.isabs(os.path.expanduser(raw)):
+        return ("path 是相对路径，已解析到进程工作目录 %s；dsh 下那是插件安装目录，"
+                "交付文件请给绝对路径" % os.path.abspath(raw))
+    return None
+
+
+def _lift_warnings(out):
+    """Nested export/project notes belong at the top of the result too.
+
+    A model reads the head of a tool result first; if Origin rewrote a filename
+    and the note only lives under out["export"]["warnings"], the delivery looks
+    clean when it is not.
+    """
+    lifted = list(out.get("warnings") or [])
+    for part in ("export", "project"):
+        sub = out.get(part) or {}
+        for note in (sub.get("warnings") or []):
+            if note not in lifted:
+                lifted.append(note)
+    if lifted:
+        out["warnings"] = lifted
+    return out
+
+
+def _written_or_mangled(target):
+    """Locate what Origin actually wrote; rename it back when its filter rewrote '#'."""
+    if os.path.isfile(target):
+        return target, None
+    folder = os.path.dirname(target) or "."
+    stem, ext = os.path.splitext(os.path.basename(target))
+    if not _HASH_RUN.search(stem):
+        return None, None
+    # Origin replaced every run of '#' with digits; turn the requested name into a
+    # pattern and accept a single unambiguous match, then rename it back.
+    pattern = []
+    i = 0
+    while i < len(stem):
+        m = _HASH_RUN.match(stem, i)
+        if m:
+            pattern.append(r"\d+")
+            i = m.end()
+        else:
+            pattern.append(re.escape(stem[i]))
+            i += 1
+    rx = re.compile("^%s%s$" % ("".join(pattern), re.escape(ext)))
+    try:
+        hits = [n for n in os.listdir(folder) if rx.match(n)]
+    except OSError:
+        hits = []
+    if len(hits) != 1:
+        return None, None
+    cand = os.path.join(folder, hits[0])
+    try:
+        os.replace(cand, target)
+        return target, ("Origin 的导出滤镜把文件名里的 # 换成了编号（实际写成 %s），已改名回你要求的路径；"
+                        "要避免就别说文件名里带 #" % hits[0])
+    except OSError as exc:
+        return cand, ("Origin 把文件名写成了 %s（# 被换成编号），改名回原路径失败：%s"
+                      % (hits[0], exc.strerror or exc))
+
+
 # ---------------------------------------------------------------- operations
 
 
@@ -1441,18 +1562,24 @@ def export(graph, path="", fmt="png", width=1600):
         # No path is not an invitation to write into the process CWD: under dsh
         # that is the plugin's node_modules folder. Origin's User Files wins.
         folder = _safe(lambda: op.path("u"), "") or os.getcwd()
-        target_path = os.path.abspath(path or os.path.join(folder, "%s.%s" % (name, fmt)))
-        if os.path.splitext(target_path)[1].lower().lstrip(".") != fmt:
-            target_path = os.path.splitext(target_path)[0] + "." + fmt
-        os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+        raw_path = str(path or "").strip()
+        target_path = _norm_target(raw_path or os.path.join(folder, "%s.%s" % (name, fmt)), fmt)
+        _prepare_write(target_path)
         _safe(lambda: page.save_fig(target_path))
-        if not os.path.isfile(target_path):
+        written, note = _written_or_mangled(target_path)
+        if not written:
             raise OriginError("export_failed", "Origin 说导出了但文件不存在：%s" % target_path,
-                              ["路径必须可写且最好是 ASCII", "先 origin_inspect 确认图页非空"])
-        info = _verify_file(target_path)
+                              ["路径必须可写；UNC/未映射盘先排除",
+                               "先 origin_inspect 确认图页非空"])
+        info = _verify_file(written)
         if not info["ok"]:
             raise OriginError("export_suspect", "导出文件过小或文件头不对：%s" % info,
                               ["图页可能是空的：origin_inspect 看 plots 数"])
+        if note:
+            info["warnings"] = [note]
+        rel = _rel_note(path)
+        if rel:
+            info["warnings"] = (info.get("warnings") or []) + [rel]
         return sanitize(dict(info, channel="originpro.save_fig", graph=name))
 
     return call(run)
@@ -1463,8 +1590,8 @@ def _save_project(path=""):
     def run():
         global _project_file
         op = origin()
-        if path:
-            target = os.path.abspath(path)
+        if str(path).strip():
+            target = _norm_target(path)
         elif _project_file:
             target = _project_file
         else:
@@ -1474,7 +1601,7 @@ def _save_project(path=""):
                                   time.strftime("origin_bridge_%Y%m%d_%H%M%S.opju"))
         if not target.lower().endswith((".opju", ".opj")):
             target += ".opju"
-        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        _prepare_write(target)
 
         # op.save(file) is Origin's Save-As: once the project is bound to that
         # file, saving the same name again returns False without meaning failure.
@@ -1484,10 +1611,12 @@ def _save_project(path=""):
         mtime_before = os.path.getmtime(target) if os.path.isfile(target) else 0
         ok = bool(op.save()) if same_file else bool(op.save(target))
 
-        if not os.path.isfile(target):
+        written, _note = _written_or_mangled(target)
+        if not written:
             raise OriginError("save_failed", "保存工程失败：%s (ok=%s)" % (target, ok),
-                              ["确认目录可写、路径为 ASCII",
+                              ["确认目录可写；中文、空格、超长路径实测都能存，UNC/未映射盘不行",
                                "换一个不冲突的文件名，或省略 path 用自动时间戳命名"])
+        target = written
         fresh = os.path.getmtime(target) > mtime_before
         if not ok and not (same_file and not fresh):
             raise OriginError("save_failed", "保存工程失败：%s (ok=%s)" % (target, ok),
@@ -1647,7 +1776,7 @@ def figure(source="", columns=None, x=1, y=1, plot_type="line", title="",
     out["proof_level"] = "verified" if deliver.get("image") else "readback_only"
     out["steps"] = steps
     out["duration_ms"] = int((time.time() - t0) * 1000)
-    return out
+    return _lift_warnings(out)
 
 
 # ------------------------------------------------------- matrix / 3D / heat maps
@@ -1711,22 +1840,27 @@ def matrix_plot(rows, template="heat_map", book_name="", graph_name="",
             out["export"] = _export_on_com_thread(gr, export_path)
         if project_path:
             out["project"] = _save_project(project_path)
-        return sanitize(out)
+        return sanitize(_lift_warnings(out))
 
     return call(run)
 
 
 def _export_on_com_thread(page, path):
     """export() body, for reuse inside another run() that is already on the thread."""
-    ext = os.path.splitext(path)[1].lower() or ".png"
-    target = os.path.abspath(path)
-    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    target = _norm_target(path)
+    if not os.path.splitext(target)[1]:
+        target += ".png"
+    ext = os.path.splitext(target)[1].lower()
+    _prepare_write(target)
     _safe(lambda: page.save_fig(target))
-    if not os.path.isfile(target):
+    written, note = _written_or_mangled(target)
+    if not written:
         raise OriginError("export_failed", "矩阵图导出没落盘：%s" % target)
-    info = _verify_file(target, must_be_image=ext in IMAGE_MAGIC)
+    info = _verify_file(written, must_be_image=ext in IMAGE_MAGIC)
     if not info["ok"]:
         raise OriginError("export_suspect", "导出文件异常：%s" % info)
+    if note:
+        info["warnings"] = [note]
     return info
 
 

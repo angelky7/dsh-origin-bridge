@@ -1,6 +1,6 @@
 {
   "name": "dsh-origin-bridge",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "在对话里驱动本机 Origin / OriginPro：导入 .dat/.csv/.txt 与电化学工作站 .bin，绘图、拟合、改样式，导出图片并保存可在 Origin 里继续编辑的 .opju 工程。dsh 插件，27 个 MCP 工具。第三方工具，与 OriginLab Corporation 无关联、未获认可。",
   "license": "MIT",
   "type": "module",

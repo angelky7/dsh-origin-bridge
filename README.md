@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-231%2B%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1079%2F1079%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
 </p>
 

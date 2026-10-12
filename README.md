@@ -247,6 +247,7 @@ Origin Bridge 的做法：
 | 已销毁对象的 `.name` | 留下 C 层待处理异常，之后一个不相干的 `len()` 才炸成 `SystemError` | 句柄登记时顺手存页面名，清理句柄表不再回摸 COM |
 | 桥坏到一定程度 | `op.path()` 抛 "returned a result with an exception set"，此时连 `op.exit()` 都跑不动；自动 `detach()/attach()` 会把可诊断的报错变成**进程直接崩** | 不自愈，抛 `connection_error` 并写明要外部重启 Origin |
 | 工作站 `.bin` 的数组布局 | 看着像两列（各 N/2），其实厂商 `.txt` 里那 600 行电流正好等于整个数组——只有测量通道 | `binio.py` 按单通道 + 方法参数重建轴，点数相等做门禁 |
+| 矩阵图的色标标题 | 色条标题是模板占位文字；`lt_exec` 字符串赋值返回 False，而 originpro 1.1.15 里静态搜 `colorscale / colorbar / cbtitle` **一个 API 都没有**（2026-10-12 查过） | `origin_matrix` 只给模板选择（heat_map / cmap / mesh / contline / contgray / 3d）与 `xy_range`；色标区间、配色、标题都没做，标题要改只能事后在 Origin 里手点——不假装能设 |
 
 ## 已知边界
 

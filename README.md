@@ -35,7 +35,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1116 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1116 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 294、L1 只读 COM 61、L2 改会话 520、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **348 项**离线/单元/边界检查（asciiio 80、binio 30、lifecycle 37、smoke 129、edge 26、paths 28、json 18）**随包发布，你可以直接复跑**；那 1116 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1116 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1116 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 294、L1 只读 COM 61、L2 改会话 520、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **352 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 37、smoke 129、edge 26、paths 28、json 18）**随包发布，你可以直接复跑**；那 1116 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -112,14 +112,14 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 项，看到 ALL GOOD 才算过
 .\.venv\Scripts\python.exe edge_checks.py             # 26 项边界
-.\.venv\Scripts\python.exe test_asciiio.py            # 80 项，不需要 Origin
+.\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 30 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
 .\.venv\Scripts\python.exe test_lifecycle.py          # 37 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
 .\.venv\Scripts\python.exe test_paths.py              # 28 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
 .\.venv\Scripts\python.exe test_json_safety.py        # 18 项，不需要 Origin：返回值必须是严格 JSON
 ```
 
-上面这 348 项随包发布，你可以自己复跑。另外那 **1116 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 352 项随包发布，你可以自己复跑。另外那 **1116 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -175,7 +175,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 | `origin_formula` | 给列设计算公式（Fx）做派生列，读回算出的行数与首末值 |
 | `origin_plot` | 单条或**多条**曲线；`template` 走 Origin 自带图模；`graph`+`layer` 往指定层画 |
 | `origin_layer` | 加层（右 Y 轴、上下多面板），返回 Origin 给这层起的名字作为证据 |
-| `origin_legend` | 图例：按列长名自动生成或写死，12 个位置，文字/可见性/坐标都读回 |
+| `origin_legend` | 图例：按列长名自动生成或写死，13 个位置，文字/可见性/坐标都读回 |
 | `origin_style` | 轴标题、**对数轴**、范围与步长、逐曲线颜色/线宽/符号形状/大小/填充/透明度，**每项读回验证** |
 | `origin_annotate` | 图上文字标注与参考线（数据坐标） |
 | `origin_matrix` | 网格数据 → 矩阵 → **热力图 / 等高线 / 3D 彩色映射面**（模板驱动） |
@@ -299,7 +299,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 348 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 352 项离线与单元检查（随包发布）
 ```
 
 开发侧另有 `cases/` + `run_cases.py` 的 1116 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。

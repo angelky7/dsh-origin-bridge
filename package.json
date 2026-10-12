@@ -1,7 +1,7 @@
 {
   "name": "dsh-origin-bridge",
   "version": "0.4.4",
-  "description": "Drive local Origin/OriginPro from chat: 27 MCP tools, 1079 full-chain test cases, import .dat/.csv/.txt/workstation .bin data, plot, fit, style, export and save editable .opju projects. Third-party tool, not affiliated with or endorsed by OriginLab Corporation.",
+  "description": "在对话里驱动本机 Origin / OriginPro：导入 .dat/.csv/.txt 与电化学工作站 .bin，绘图、拟合、改样式，导出图片并保存可在 Origin 里继续编辑的 .opju 工程。dsh 插件，27 个 MCP 工具。第三方工具，与 OriginLab Corporation 无关联、未获认可。",
   "license": "MIT",
   "type": "module",
   "repository": {

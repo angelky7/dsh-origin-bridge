@@ -62,6 +62,8 @@
 dsh plugin --profile desktop add dsh-origin-bridge
 ```
 
+> 只多装 **1 个包**（隔离 profile 实测 pnpm `Packages: +1`，620ms）。宿主自带的 `@deepseek-ai/dsh-mcp-client` 声明成**可选 peer**，不会在插件目录里再塞一份 loader 副本。
+
 两个包名指向同一个包，装哪个都行：
 
 ```bash
@@ -211,6 +213,8 @@ Origin Bridge 的做法：
 ## 设计取舍
 
 **为什么不用 `mcp` SDK 的 stdio 传输。** SDK 建的是 asyncio `ProactorEventLoop`，其 self-pipe 在 Windows 上回落到 `socketpair()`（127.0.0.1 listen+connect+accept）。防火墙拦回环 accept 的机器上这一步永久阻塞 → initialize 永不返回 → 客户端等满 60 秒超时。`server.py` 用同步换行分隔 JSON-RPC，握手毫秒级，零事件循环依赖。
+
+**宿主注入的包走 peerDependencies，不走 dependencies。** 以前 `@deepseek-ai/dsh-mcp-client` 写在 `dependencies` 里，`>=0.1.0-rc.1` 这个范围在 pnpm/npm 的默认语义下**够不到** 0.2.0-rc.2 这种新预发布（同元组才允许比预发布），于是安装器只会去挑 0.1.0-rc.8 那份老 loader：隔离 profile 实测旧形状 `Packages: +101` 并落下 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.8`，新形状 `Packages: +1`、`@deepseek-ai` 目录为空。范围写成 `0.2.0-rc.2 || >=0.1.0-rc.1 <1` 是必要的——宿主门禁读 peer 时带 `includePrerelease`（拿运行中的宿主版本比），pnpm 读同一个字符串时不带，只有这种"精确 + 宽松"的并集两边都满足；改成单一 `>=0.1.0-rc.1` 会在安装器侧退回过期版本。`peerDependenciesMeta.optional: true` 则是让 npm 7+ 连自动装 peer 都不做。**别把它"简化"回 dependencies。**
 
 **为什么返回句柄而不是 Origin 引用字符串。** `[Book1]Sheet1!` 这类引用对大小写、空格、活动页状态都敏感，写错了不报错只静默失败。引擎内部持有真实对象，把 `ws-1` / `gr-2` 交给模型原样传回。
 

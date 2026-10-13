@@ -14,9 +14,6 @@
   "homepage": "https://github.com/caob23/dsh-origin-bridge#readme",
   "main": "./index.js",
   "icon": "./icon.svg",
-  "dependencies": {
-    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.1"
-  },
   "bin": {
     "origin-bridge": "bin/origin-bridge.mjs"
   },
@@ -80,5 +77,13 @@
     "opju",
     "scientific-plotting",
     "electrochemistry"
-  ]
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.2.0-rc.2 || >=0.1.0-rc.1 <1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-mcp-client": {
+      "optional": true
+    }
+  }
 }

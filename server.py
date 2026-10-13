@@ -192,7 +192,7 @@ TOOLS = [
     },
     {
         "name": "origin_export",
-        "description": "把图页导出为图片文件，并校验文件确实存在、够大、文件头正确（Origin 有静默失败的历史）。fmt: png/tif/jpg/svg/pdf/emf（tiff→tif、jpeg→jpg 会自动改写扩展名）。",
+        "description": "把图页导出为图片文件，并校验文件确实存在、够大、文件头正确（Origin 有静默失败的历史）。fmt: png/tif/jpg/svg/pdf/emf（tiff→tif、jpeg→jpg 会自动改写扩展名）。path 给绝对路径：中文、空格、长路径实测可用，未映射盘/UNC/把目录当文件名返回 bad_path，已存在但只读或被占用返回 target_locked（不覆盖）。文件名里的 # 会被 Origin 换成编号，桥认出后改名回你要的名字并在 warnings 里说明——那是成功，不是失败。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -208,7 +208,7 @@ TOOLS = [
     },
     {
         "name": "origin_save_project",
-        "description": "保存为可在 Origin 里继续编辑的 .opju 工程文件（不是图片快照）。省略 path 会自动命名。",
+        "description": "保存为可在 Origin 里继续编辑的 .opju 工程文件（不是图片快照）。省略 path 会自动命名。path 给绝对路径，中文/空格/长路径实测可用；未映射盘、UNC、把目录当文件名一律 bad_path，不会假装存好了。",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}},
@@ -236,7 +236,7 @@ TOOLS = [
     },
     {
         "name": "origin_figure",
-        "description": "主路径：一次调用完成 导入/写数 → 画图 → 轴标题 → 导出图片 → 保存可编辑 .opju。用户只想“把这份数据画成图并给我文件”时用它，不要拆成多步。返回里若有 warnings，说明图虽然画成了但可能不可读（例如线性横轴跨了几个数量级，点全挤在最左边）：把 next_actions 里的方案讲给用户让他选，不要自己擅自改轴。",
+        "description": "主路径：一次调用完成 导入/写数 → 画图 → 轴标题 → 导出图片 → 保存可编辑 .opju。用户只想“把这份数据画成图并给我文件”时用它，不要拆成多步。返回里若有 warnings，可能是两类：图不可读（例如线性横轴跨了几个数量级，点全挤在最左边）——把 next_actions 里的方案讲给用户让他选，不要自己擅自改轴；或是路径被代劳了（文件名里的 # 被 Origin 换成编号后改回、相对路径落到进程工作目录）——转达给用户即可，交付本身是成功的。",
         "inputSchema": {
             "type": "object",
             "properties": {

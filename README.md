@@ -64,6 +64,14 @@ dsh plugin --profile desktop add dsh-origin-bridge
 
 > 只多装 **1 个包**（隔离 profile 实测 pnpm `Packages: +1`，620ms）。宿主自带的 `@deepseek-ai/dsh-mcp-client` 声明成**可选 peer**，不会在插件目录里再塞一份 loader 副本。
 
+> 装的时候报 `ERR_PNPM_NO_MATCHING_VERSION`、提示 "latest release is 0.4.x"：那是**镜像滞后**，不是包没发出去。dsh 安装完全沿用你本机的 npm 配置（`npm config get registry` 看一眼），实测 0.4.5 发布 2.5 小时后 `registry.npmmirror.com` 上仍只有 0.4.4。两种解法都验证过：
+> ```bash
+> # 1) 显式走官方源（这个参数会透传给 pnpm；24 小时新鲜度门禁会自己写进 minimumReleaseAgeExclude）
+> dsh plugin --profile desktop add dsh-origin-bridge --registry=https://registry.npmjs.org/
+> # 2) 离线包，完全不经过 registry
+> dsh plugin --profile desktop add file:C:\path\to\dsh-origin-bridge
+> ```
+
 两个包名指向同一个包，装哪个都行：
 
 ```bash
@@ -286,8 +294,12 @@ Origin Bridge 的做法：
 | `import_empty` | 先 `origin_read_file` 看结构；空格/多行表头已由自研解析器处理，走到这个报错说明文件本身没有数值行 |
 | `com_timeout` | Origin 窗口是否卡在对话框/许可证弹窗 |
 | `无效指针` | 页面攒太多：`origin_close_pages`，或 `origin_exit` 让它重开 |
-| 图片没出来 | `origin_inspect` 看 `plots` 是否为 0；换 ASCII 路径 |
+| 图片没出来 | `origin_inspect` 看 `plots` 是否为 0；中文/空格/长路径实测可用，不用刻意改 ASCII |
 | 图是空的但没报错 | 看返回里的 `proof_level`；`plot_axis_degenerate` 会主动抛出 |
+| `bad_path` | 路径本身不行：把目录当文件名、盘符没映射、UNC 主机不可达、或路径里没有真正的文件名。换可写的绝对路径，别原样重试 |
+| `target_locked` | 目标文件已存在且不可写（只读属性或正被 Origin/图片查看器占用）。去掉只读或换名，桥不会覆盖它 |
+| 导出报了 `export_failed` 但目录里有张图 | 看 `warnings`：文件名里的 `#` 会被 Origin 换成编号，桥认出后会改名回你要的名字；认出多个候选时不会猜，直接报错让你换名 |
+| `ERR_PNPM_NO_MATCHING_VERSION`（装不上） | 镜像滞后，不是没发布：`npm config get registry` 看一眼，加 `--registry=https://registry.npmjs.org/` 或改用 `file:` 离线包 |
 
 ## 给维护者
 

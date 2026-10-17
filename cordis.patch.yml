@@ -17,8 +17,12 @@
 #   manual install -> set ORIGIN_BRIDGE_HOME to the folder holding server.py
 #   interpreter    -> set ORIGIN_BRIDGE_PYTHON to your venv python.exe
 #
-# failOnStartupError: false keeps dsh bootable when Origin is missing or a modal
-# dialog stalls the COM server; the tools just do not register that session.
+# failOnStartupError: false keeps dsh bootable when this entry cannot start at all —
+# measured (2026-10-19) that means only a missing interpreter: the default command is
+# `python` from PATH. A missing originpro does NOT hide the tools: all 27 still
+# register and every call answers `missing_originpro` with the fix to run. Origin
+# itself being closed is irrelevant to startup — the COM connection is made lazily
+# inside the first tool call, not here.
 
 - insert:
     - id: mcp-origin-bridge

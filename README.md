@@ -87,6 +87,12 @@ dsh plugin --profile desktop add @caob23/dsh-origin-bridge  # 转发壳，依赖
 pip install originpro numpy        # 国内网络慢就加 -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
+> **前置缺了会怎样，两种情况不一样**（2026-10-19 实测，别猜）：
+> - **解释器在、`originpro` 不在**：27 个工具**照常注册**，每一次调用都返回 `code=missing_originpro` 和原因（`No module named 'originpro'`），`isError: true`——看得见、知道修什么。
+> - **PATH 上没有 `python`**（补丁默认命令就是 `python`）：桥进程起不来，`failOnStartupError: false` 保证 dsh 照常启动，代价是那一轮**工具完全不注册**、也没有报错。这时先设 `ORIGIN_BRIDGE_PYTHON`。
+>
+> Origin 没开**不影响**注册：COM 连接是第一次工具调用时才建立的。
+
 包内补丁的默认取值是 `python`（PATH 上那个）和 `profiles/desktop`。依赖装在 venv 里、或者你用的是别的 profile，就设这两个用户环境变量（设完要重开终端、再彻底重启 dsh）：
 
 ```powershell

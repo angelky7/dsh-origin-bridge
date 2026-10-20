@@ -1,0 +1,46 @@
+name: offline-checks
+
+# Everything here runs without Origin installed: the suites exercise the parser,
+# path handling, JSON strictness, read_file shaping and the process classifier.
+# Because originpro is imported lazily, the bridge imports fine on a runner that has
+# no Origin — which is exactly why these checks can gate every push for free.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install test dependencies
+        run: python -m pip install --upgrade pip numpy
+      - name: parser, paths, JSON, read_file
+        run: |
+          python test_asciiio.py
+          python test_binio.py
+          python test_paths.py
+          python test_json_safety.py
+          python test_readfile.py
+      - name: lifecycle classification (no Origin needed)
+        run: python test_lifecycle.py
+      - name: server advertises all 27 tools
+        run: |
+          $n = (python server.py --tools | Measure-Object -Line).Lines
+          Write-Host "tools: $n"
+          if ($n -ne 27) { exit 1 }

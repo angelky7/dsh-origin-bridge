@@ -18,6 +18,7 @@
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
   <img alt="tests" src="https://img.shields.io/badge/tests-1126%2F1126%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
+  <a href="https://github.com/caob23/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/caob23/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
 
 <p align="center">

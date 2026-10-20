@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.6"
+SERVER_VERSION = "0.4.7"
 PROTOCOL = "2024-11-05"
 
 
@@ -106,7 +106,7 @@ TOOLS = [
     },
     {
         "name": "origin_read_file",
-        "description": "只解析数据文件、不碰 Origin：返回编码、分隔符、表头行数、每列长名/单位/有效行数，以及仪器参数 metadata。拿到陌生 .dat/.csv/.txt 先用它看清结构，再决定 origin_import 用哪几列。支持 #、//、!、; 注释、BOM、GBK、空格对齐、Fortran 的 1.5d+00 指数、NA/- 缺失值、Origin 三行表头（Long Name/Units/Comments），也支持电化学工作站（CH Instruments 等）导出的 txt：前面几十行参数说明会被跳进 metadata，紧贴数据的 Potential/V, Current/A 这类表头按斜杠拆出列名和单位。.bin 走另一条解析路线：返回技术标签（CV/LSV/IMP/i-t）、点数、两个 float32 数组的范围和 role_confidence。",
+        "description": "只解析数据文件、不碰 Origin：返回编码、分隔符、表头行数、每列长名/单位/有效行数，以及仪器参数 metadata。拿到陌生 .dat/.csv/.txt 先用它看清结构，再决定 origin_import 用哪几列。支持 #、//、!、; 注释、BOM、GBK、空格对齐、Fortran 的 1.5d+00 指数、NA/- 缺失值、Origin 三行表头（Long Name/Units/Comments），也支持电化学工作站（CH Instruments 等）导出的 txt：前面几十行参数说明会被跳进 metadata，紧贴数据的 Potential/V, Current/A 这类表头按斜杠拆出列名和单位。编码覆盖 UTF-8 / GBK / UTF-16（有无 BOM）/ cp1252；<0.001、2.5±0.1、25 mV、1,234.5、(500)、2.5* 这类被装饰的数值会解出来并在 warnings 里说明代入了什么。每列还带 sample（前 3 个原始值，缺值为 null），用来抽查解析对不对——完整数据仍然只进 Origin。二进制表格 .xls/.xlsx/.wks 不在它的范围内，会明确返回 unsupported_file_type，请用 origin_import。.bin 走另一条解析路线：返回技术标签（CV/LSV/IMP/i-t）、点数、两个 float32 数组的范围和 role_confidence。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -217,7 +217,7 @@ TOOLS = [
     },
     {
         "name": "origin_open",
-        "description": "打开已有的 .opju/.opj 工程，返回页面清单。",
+        "description": "打开已有的 .opju/.opj 工程，返回页面清单。打开会替换工程里的所有页面，所以之前拿到的 ws-/gr- 句柄全部作废（返回 handles_reset: true）——要用就用返回的页面名，或重新 origin_import/origin_plot 拿新句柄；打开失败时旧句柄同样作废。",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}},

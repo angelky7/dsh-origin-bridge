@@ -11,12 +11,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>1118 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>27 个工具 · <b>1126 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1118%2F1118%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1126%2F1126%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
 </p>
 
@@ -35,7 +35,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1118 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1118 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 296、L1 只读 COM 61、L2 改会话 520、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **352 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 37、smoke 129、edge 26、paths 28、json 18）**随包发布，你可以直接复跑**；那 1118 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1126 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1126 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 521、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **364 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 37、smoke 129、edge 26、paths 28、json 18、readfile 12）**随包发布，你可以直接复跑**；那 1126 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -50,7 +50,7 @@
 | "做一张 XPS 图" | `origin_chart_render`（40 个科研预设：轴标题/图类型/建议拟合） |
 | "热力图显示这个矩阵" | `origin_matrix`（heat_map / cmap / mesh / contline，Origin 自带图模） |
 
-数据源支持：`.dat` `.csv` `.txt` `.tsv`（自动嗅探分隔符；编码覆盖 UTF-8 / GBK / **UTF-16（有无 BOM 都行）** / cp1252；多行表头、Fortran 指数、`NA`/`-`；还有 `<0.001` 检出限、`2.5±0.1`、`25 mV`、`1,234.5`、`(500)`、`2.5*` 这类被装饰过的数值——每解一种都会在 `warnings` 里写清代入了什么）、`.xls` `.xlsx`、电化学工作站（CH Instruments 等）导出的 `.txt`（几十行仪器说明自动收进 `metadata`，不会把首行日期当成列名），以及头部为 `80 F2 1B 00` 的电化学工作站二进制 `.bin`。
+数据源支持：`.dat` `.csv` `.txt` `.tsv`（`origin_read_file` 只读这些文本类；`.xls/.xlsx/.wks` 会明确报 `unsupported_file_type` 让你改用 `origin_import`。自动嗅探分隔符；编码覆盖 UTF-8 / GBK / **UTF-16（有无 BOM 都行）** / cp1252；多行表头、Fortran 指数、`NA`/`-`；还有 `<0.001` 检出限、`2.5±0.1`、`25 mV`、`1,234.5`、`(500)`、`2.5*` 这类被装饰过的数值——每解一种都会在 `warnings` 里写清代入了什么）、`.xls` `.xlsx`、电化学工作站（CH Instruments 等）导出的 `.txt`（几十行仪器说明自动收进 `metadata`，不会把首行日期当成列名），以及头部为 `80 F2 1B 00` 的电化学工作站二进制 `.bin`。
 
 ## 安装
 
@@ -133,9 +133,10 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe test_lifecycle.py          # 37 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
 .\.venv\Scripts\python.exe test_paths.py              # 28 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
 .\.venv\Scripts\python.exe test_json_safety.py        # 18 项，不需要 Origin：返回值必须是严格 JSON
+.\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
 ```
 
-上面这 352 项随包发布，你可以自己复跑。另外那 **1118 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 364 项随包发布，你可以自己复跑。另外那 **1126 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -185,7 +186,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 | 工具 | 用途 |
 |---|---|
 | `origin_status` | 连接检查、Origin 版本、已开页面。**动手前先调它** |
-| `origin_read_file` | 只解析文件不碰 Origin：编码、分隔符、表头行、每列长名/单位/有效行数；`.bin` 走另一条路线给出技术/点数/方法参数/轴来源 |
+| `origin_read_file` | 只解析文件不碰 Origin：编码、分隔符、表头行、每列长名/单位/有效行数、**前 3 个原始值（`sample`，缺值为 null，用来抽查没串列）**；`.xls/.xlsx/.wks` 明确拒绝并让你改用 `origin_import`；`.bin` 走另一条路线给出技术/点数/方法参数/轴来源 |
 | `origin_import` | 导入 `.dat/.csv/.txt/.tsv/.xls/.xlsx/.wks` 和工作站二进制 `.bin`，返回 `ws-N` 句柄和列清单 |
 | `origin_write` | 内联数据建表：窄表 `columns={列名:[值…]}`，宽表 `headers`+`rows`（一次写完） |
 | `origin_formula` | 给列设计算公式（Fx）做派生列，读回算出的行数与首末值 |
@@ -273,6 +274,7 @@ Origin Bridge 的做法：
 | 编码候选顺序 | 仪器"另存为 Unicode 文本"导出的 UTF-16（有/无 BOM）此前直接报 `找不到数值数据行`；而 cp1252 写的 `µ`/`°` 会被 gb18030 **抢先**解成 `祍`/`癈`——它不报错，所以错误一路静默到列名 | `read_text` 先认 BOM，无 BOM 时按 NUL 占比猜 utf-16 并在 `encoding` 里写明是猜的；再用"高位字节成对=GBK、孤立单字节=cp1252"决定候选顺序（`high_byte_runs`） |
 | 装饰过的数值格子 | `<0.001`、`2.5±0.1`、`25 mV`、`1,234.5`、`2.5*`、`(500)`、`1e400` 这些形态此前让整列被判"全为空"直接丢弃——用户看到的是少一列数据，不是报错 | `cell_number` 逐形态解开并回一条 `warnings` 说明代入了什么；溢出/Infinity 一律按缺值，绝不把 inf 送出桥 |
 | 分隔符嗅探 | 欧陆 `Zeit;Signal / 0,0;1,5` 会被逗号拆开，而且错的拆法因为"列更多"在评分里胜出 | 评分改成：数值列数 → 行宽一致性 → 列数更少者优先；表头行不参与数值比 |
+| `origin_open` 与句柄 | 开工程会替换所有页面，之前发出去的 `ws-/gr-` 句柄全部指向已销毁的对象；死对象上的 `save_fig` 会"成功"但什么都不写（1124 例跑里正是它让连续三个导出失败） | `open_project` 成功与失败都清空句柄表并在返回里给 `handles_reset: true`；旧句柄再用会得到 `worksheet_not_found`/`graph_not_found`，不会静默操作死页面 |
 | 非标准 JSON | `json.dumps` 默认把 inf/nan 写成裸 `Infinity`/`NaN`，那不是合法 JSON——dsh 侧整条响应解析失败，看起来像"桥挂了"而不是"一个数不对" | `sanitize()` 把 ±inf/nan 归 None；`server.py` 写出走 `allow_nan=False`，兜不住就降级成带原 id 的 JSON-RPC 错误；`smoke_test` 客户端用 `strict_loads` 拒绝，测试不会替产品掩盖它（`test_json_safety.py` 18 项） |
 
 ## 已知边界
@@ -321,10 +323,10 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 352 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 364 项离线与单元检查（随包发布）
 ```
 
-开发侧另有 `cases/` + `run_cases.py` 的 1118 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。
+开发侧另有 `cases/` + `run_cases.py` 的 1126 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。
 

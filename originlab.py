@@ -669,7 +669,16 @@ def read_file(path, comment=None):
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isfile(path):
         raise OriginError("file_not_found", "文件不存在：%s" % path)
-    if os.path.splitext(path)[1].lower() == ".bin":
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".xls", ".xlsx", ".wks"):
+        # Decoding a zip/OLE container as text "succeeds" into mojibake and then reports
+        # "只有表头？", blaming the user's file for our mistake (measured 2026-10-19).
+        raise OriginError(
+            "unsupported_file_type",
+            "%s 是二进制表格，origin_read_file 只读文本类数据" % ext,
+            ["用 origin_import 直接导入（走 Origin 原生导入）",
+             "或先在 Excel 里另存为 .csv，再用 origin_read_file 预览结构"])
+    if ext == ".bin":
         try:
             decoded = binio.read_bin(path)
         except binio.BinFormatError as exc:
@@ -689,8 +698,14 @@ def read_file(path, comment=None):
     except ValueError as exc:
         raise OriginError("parse_failed", str(exc),
                           ["确认文件里有数值行", "给 comment 指定实际的注释前缀"])
-    parsed["columns"] = [{k: v for k, v in c.items() if k != "values"}
-                         for c in parsed["columns"]]
+    # Three raw values per column: enough for the model to spot a shifted column or a
+    # column that parsed to nothing, without putting the whole dataset in context.
+    parsed["columns"] = [
+        dict({k: v for k, v in c.items() if k != "values"},
+             sample=(c.get("values") or [])[:3])
+        for c in parsed["columns"]]
+    parsed["sample_note"] = ("sample 是每列前 3 个原始值（缺值为 null），只用来抽查解析是否正确；"
+                             "完整数据用 origin_import 进 Origin")
     parsed["proof_level"] = "verified"
     return sanitize(parsed)
 
@@ -1662,12 +1677,26 @@ def open_project(path):
     def run():
         global _project_file
         op = origin()
-        if not op.open(path):
+        # Opening a project replaces every page, so every handle handed out earlier is
+        # dead — and a *refused* open can still have closed the current project. Both
+        # ways the table has to go: leaving it behind makes later calls act on dead
+        # pages, where originpro's wrapper "succeeds" and Origin quietly writes nothing
+        # (that is how three exports failed in the 1124-case run).
+        try:
+            ok = bool(op.open(path))
+        finally:
+            _handles.clear()
+            _names.clear()
+        if not ok:
+            _project_file = ""
             raise OriginError("open_failed", "Origin 拒绝打开这个工程：%s" % path,
                               ["确认文件是 .opju/.opj 且没被另一个 Origin 实例锁住",
-                               "Origin 版本低于该工程保存版本时也打不开"])
+                               "Origin 版本低于该工程保存版本时也打不开",
+                               "打开失败后旧句柄已作废，请重新 origin_inspect 看当前页面"])
         _project_file = path
-        return sanitize({"opened": path, "open_pages": [p.name for p in op.pages()]})
+        return sanitize({"opened": path, "open_pages": [p.name for p in op.pages()],
+                         "handles_reset": True,
+                         "note": "之前拿到的 ws-/gr- 句柄全部作废（工程换了页面），请用这里的页面名或重新导入"})
 
     return call(run)
 

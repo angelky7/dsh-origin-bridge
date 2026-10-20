@@ -1,2 +1,4 @@
+# 实测环境：originpro 1.1.15 + OriginPro 2024 SR1 (10.100178) + Python 3.12
+# originpro 要求 Origin 2021+；2.x 没有验证过，暂不设上限。
 originpro>=1.1.0
 numpy>=1.24

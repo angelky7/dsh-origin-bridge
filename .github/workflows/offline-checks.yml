@@ -37,6 +37,7 @@ jobs:
           python test_paths.py
           python test_json_safety.py
           python test_readfile.py
+          python test_labtalk_guard.py
       - name: lifecycle classification (no Origin needed)
         run: python test_lifecycle.py
       - name: server advertises all 27 tools

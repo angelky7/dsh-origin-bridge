@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.7"
+SERVER_VERSION = "0.4.8"
 PROTOCOL = "2024-11-05"
 
 
@@ -145,7 +145,7 @@ TOOLS = [
                 "symbol_interior": {"type": "integer", "enum": [0, 1, 2, 3],
                                      "description": "0 无符号 1 实心 2 空心 3 点心"},
                 "transparency": {"type": "number", "description": "0-100 百分比"},
-                "fill_area": {"type": "boolean", "description": "线下填充（面积图效果）"},
+                "fill_area": {"type": ["boolean", "integer"], "description": "线下填充（面积图效果，1/true 都行）"},
             },
             "required": ["graph"],
         },
@@ -168,7 +168,7 @@ TOOLS = [
             "properties": {
                 "worksheet": {"type": "string"},
                 "x": {"type": ["integer", "string"], "default": 1},
-                "y": {"type": ["integer", "string"], "default": 2},
+                "y": {"type": ["integer", "string", "array"], "default": 2},
                 "kind": {"type": "string", "enum": ["linear", "nlfitsing", "gauss", "lorentz",
                                                     "voigt", "expdec1", "expdec2", "sine", "power",
                                                     "logistic", "boltzmann", "doseresp", "cubic",
@@ -200,7 +200,7 @@ TOOLS = [
                 "path": {"type": "string", "description": "输出文件绝对路径；省略则用图页名放到当前目录"},
                 "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
                         "default": "png"},
-                "width": {"type": "integer", "default": 1600},
+                "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
             },
         },
         "run": lambda a: originlab.export(a.get("graph", ""), a.get("path", ""),
@@ -243,14 +243,14 @@ TOOLS = [
                 "source": {"type": "string", "description": "数据文件路径（与 columns 二选一）"},
                 "columns": {"type": "object", "description": "内联数据 {列名: [值...]}，优先用 source"},
                 "x": {"type": ["integer", "string"], "default": 1},
-                "y": {"type": ["integer", "string"], "default": 2},
+                "y": {"type": ["integer", "string", "array"], "default": 2},
                 "plot_type": {"type": "string", "enum": ["line", "scatter", "line_symbol", "column"], "default": "line"},
                 "title": {"type": "string"},
                 "x_title": {"type": "string"},
                 "y_title": {"type": "string"},
                 "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
                         "default": "png"},
-                "width": {"type": "integer", "default": 1600},
+                "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
                 "output_dir": {"type": "string", "description": "交付目录：图片 + opju 都写到这。不给则只建图、不落盘"},
                 "export_path": {"type": "string"},
                 "project_path": {"type": "string"},
@@ -394,7 +394,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
-                "data": {"type": "string", "description": "数据文件路径，会先 origin_read_file 解析列名"},
+                "data": {"type": ["string", "object", "array"], "description": "数据文件路径；也接受内联的 {列名:[值]} 或列名列表"},
                 "columns": {"type": "array", "description": "或者直接给列名列表"},
             },
             "required": ["name"],
@@ -421,7 +421,7 @@ TOOLS = [
                 "with_legend": {"type": "boolean", "default": True},
                 "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
                         "default": "png"},
-                "width": {"type": "integer", "default": 1600},
+                "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
             },
             "required": ["name"],
         },
@@ -452,14 +452,14 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "graph": {"type": "string", "description": "省略则用当前活动图页"},
-                "width": {"type": "integer", "default": 900},
+                "width": {"type": "integer", "minimum": 100, "maximum": 2400, "default": 900},
             },
         },
         "run": lambda a: originlab.view(a.get("graph", ""), a.get("width", 900)),
     },
     {
         "name": "origin_labtalk",
-        "description": "逃生舱：执行原始 LabTalk，并读回你点名的变量（numeric 读数值表达式，readback 读字符串变量）。实测限制：数值/表达式类语句可用（如 layer.x.type=2、win -a Graph1），但字符串赋值类语句（layer.x.title$=... 、set c1 -l ...）在这台机器上 lt_exec 会返回 False，轴标题等请用 origin_style。returned=false 就是真失败，别重试同一条。doc -s / saveas / exitloop 等破坏性命令被禁。",
+        "description": "逃生舱：执行原始 LabTalk，并读回你点名的变量（numeric 读数值表达式，readback 读字符串变量）。实测限制：数值/表达式类语句可用（如 layer.x.type=2、win -a Graph1），但字符串赋值类语句（layer.x.title$=... 、set c1 -l ...）在这台机器上 lt_exec 会返回 False，轴标题等请用 origin_style。returned=false 就是真失败，别重试同一条。破坏性命令会被拦下并返回 labtalk_denied：doc -s/-n/-o（存/新建/打开工程）、win -c/-cd（关/销毁页面）、del/delete、layer -d、page -d、run./run -、system/shell、type -、rmdir/mkdir、quit/exit、close、saveas。这是劝告式护栏、不是沙箱（变量拼接仍可能绕过），别拿它做破坏性操作；页面/句柄管理用 origin_close_pages，保存用 origin_save_project。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -492,6 +492,44 @@ def _tool_result(call_id, payload, is_error=False):
                         "mimeType": payload.get("mime", "image/png")})
     content.append({"type": "text", "text": json.dumps(body, ensure_ascii=False, default=str)})
     return {"jsonrpc": "2.0", "id": call_id, "result": {"content": content, "isError": is_error}}
+
+
+_JSON_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
+               "array": list, "object": dict}
+
+
+def _validate_args(name, args, schema):
+    """Reject wrong-shaped arguments as bad_arguments before the tool runs.
+
+    Only *types* are checked here. Enums and ranges stay with the engine, which
+    answers with a more specific code (`bad_position`, `bad_format`, `bad_layer_type`)
+    than a generic bad_arguments would. What this fixes is the type confusion: a
+    `path: 123` used to reach the engine and surface as `origin_unavailable` with a
+    raw TypeError, i.e. the model was told Origin was missing. Extra keys are fine.
+    """
+    props = (schema or {}).get("properties") or {}
+    problems = []
+    for key, spec in props.items():
+        if key not in args or args[key] is None:
+            continue
+        value = args[key]
+        types = spec.get("type")
+        types = types if isinstance(types, list) else ([types] if types else [])
+        if types:
+            def fits(t):
+                py = _JSON_TYPES.get(t)
+                if py is None:
+                    return True
+                if t in ("integer", "number") and isinstance(value, bool):
+                    return False
+                return isinstance(value, py)
+            if not any(fits(t) for t in types):
+                problems.append("%s 应为 %s，收到 %s"
+                                % (key, "/".join(types), type(value).__name__))
+                continue
+    if problems:
+        raise originlab.OriginError("bad_arguments", "%s 参数不合法：%s" % (name, "；".join(problems)),
+                                    ["按工具的 inputSchema 修正参数类型/范围后再调用"])
 
 
 def _handle(msg):
@@ -532,6 +570,7 @@ def _handle(msg):
             return _tool_result(call_id, {"ok": False, "code": "bad_arguments",
                                           "message": "arguments 必须是对象"}, True)
         try:
+            _validate_args(name, args, tool.get("inputSchema"))
             out = tool["run"](args)
             if isinstance(out, dict):
                 out = {"ok": True, **out}
@@ -579,13 +618,31 @@ def main():
 
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
-    _log("ready; python=%s" % sys.executable)
+    # One JSON line is one request; an unbounded readline let a single huge
+    # `columns` payload allocate whatever the client sent. The cap only needs to be
+    # far above any real dataset (a 1M-point two-column write is ~30 MB of JSON).
+    max_line = int(os.environ.get("ORIGIN_BRIDGE_MAX_LINE", 64 * 1024 * 1024))
+    _log("ready; python=%s | max line %d" % (sys.executable, max_line))
 
     while True:
-        raw = stdin.readline()
+        raw = stdin.readline(max_line + 1)
         if not raw:
             _log("stdin closed; exiting")
             return 0
+        if len(raw) > max_line and not raw.endswith(b"\n"):
+            # Drain the rest of the oversized line so the next request is not read
+            # from the middle of this one, then answer with a clean error.
+            while True:
+                chunk = stdin.readline(max_line + 1)
+                if not chunk or chunk.endswith(b"\n"):
+                    break
+            _log("request over %d bytes refused" % max_line)
+            stdout.write((json.dumps({"jsonrpc": "2.0", "id": None,
+                                      "error": {"code": -32600,
+                                                "message": "请求太大：单行上限 %d 字节" % max_line}},
+                                     ensure_ascii=False) + "\n").encode("utf-8"))
+            stdout.flush()
+            continue
         raw = raw.strip()
         if not raw:
             continue

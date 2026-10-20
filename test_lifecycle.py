@@ -226,6 +226,20 @@ for tool in server.TOOLS:
               bool(tool.get("description")) and isinstance(tool.get("inputSchema"), dict))
 
 print()
+print("page-growth hint（不碰 COM）:")
+originlab._reset_growth()
+early = [originlab._growth_warning() for _ in range(49)]
+check("前 49 个页面不出提示", all(h is None for h in early))
+h50 = originlab._growth_warning()
+check("第 50 个页面给出提示", bool(h50) and "50" in h50, h50)
+check("提示带实测耗时", bool(h50) and "2.8" in h50, h50)
+originlab._reset_growth()
+check("清理后计数归零", originlab._page_growth[0] == 0, originlab._page_growth[0])
+check("非新建不计数", originlab._growth_warning(created=False) is None
+      and originlab._page_growth[0] == 0)
+originlab._reset_growth()
+
+print()
 if fails:
     print("%d 项失败: %s" % (len(fails), ", ".join(fails)))
     raise SystemExit(1)

@@ -129,6 +129,17 @@ def main():
     ok("blank path silent", ol._rel_note("   ") is None)
     ok("no file written into the package dir by these checks",
        set(os.listdir(HERE)) == before, sorted(set(os.listdir(HERE)) - before))
+    print()
+    print("width guards (shared by export and view):")
+    ok("0 is refused", code_of(lambda: ol._image_width(0, 900, 2400)) == "bad_arguments")
+    ok("negative is refused", code_of(lambda: ol._image_width(-5, 900, 2400)) == "bad_arguments")
+    ok("absurd is refused", code_of(lambda: ol._image_width(100000, 900, 2400)) == "bad_arguments")
+    ok("the ceiling itself is allowed", ol._image_width(2400, 900, 2400) == 2400)
+    ok("a tiny value is lifted to the floor", ol._image_width(20, 900, 2400) == 100)
+    ok("garbage falls back to the default", ol._image_width("wide", 900, 2400) == 900)
+    ok("export ceiling is higher than view",
+       ol._image_width(12000, 1600, 12000) == 12000)
+
 
     print("\n%d/%d path checks passed" % (PASSED, PASSED + len(FAILED)))
     if FAILED:

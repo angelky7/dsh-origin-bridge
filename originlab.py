@@ -351,6 +351,28 @@ atexit.register(_release_on_exit)
 
 _handles = {}
 _names = {}
+
+# Measured 2026-10-20: 300 graph pages do not break the bridge, but each plot slows
+# from ~0.7 s (first 100) to ~2.8 s (200-300), because Origin's COM surface grows with
+# the project. Counting pages we create costs nothing (no extra COM call), so we can
+# tell the caller before it becomes painful.
+_page_growth = [0]
+_GROWTH_HINT_EVERY = 50
+
+
+def _growth_warning(created=True):
+    if not created:
+        return None
+    _page_growth[0] += 1
+    n = _page_growth[0]
+    if n % _GROWTH_HINT_EVERY:
+        return None
+    return ("本次会话已新建约 %d 个图页且未清理：实测 300 页时每张图约 2.8 秒（100 页时约 0.7 秒）。"
+            "长会话建议 origin_close_pages(kind='graph')，或 origin_exit 后重开" % n)
+
+
+def _reset_growth():
+    _page_growth[0] = 0
 _seq = [0]
 _project_file = ""
 
@@ -1031,6 +1053,9 @@ def plot(worksheet, x=1, y=2, plot_type="line", graph_name="", title="",
         if review:
             span["warnings"] = [review]
             span["next_actions"] = list(REVIEW_OPTIONS)
+        grown = _growth_warning(created=(int(layer) == 0))
+        if grown:
+            span.setdefault("warnings", []).append(grown)
         return sanitize({"graph": _bind("gr", gr, gr.name), "plot_type": plot_type,
                          "channel": channel, "template": tpl,
                          "source_sheet": _safe(lambda: ws.name, ""),
@@ -1370,8 +1395,25 @@ def _layer_count(gr):
     return n
 
 
+def _image_width(value, default, hi):
+    """Validate a rendering width. Both ends matter: 0 or negative is nonsense, and
+    a huge number makes Origin render a file too big to hand back."""
+    try:
+        width = int(value)
+    except (TypeError, ValueError):
+        width = default
+    if width <= 0:
+        raise OriginError("bad_arguments", "width 必须是正整数，收到 %r" % (value,))
+    if width > hi:
+        raise OriginError("bad_arguments", "width 太大：上限 %d，收到 %d" % (hi, width),
+                          ["出版图给 1600–3000 就够；预览图给 900"])
+    return max(100, width)
+
+
 def view(graph, width=900):
     """Render the graph to a small PNG and hand the bytes back for visual check."""
+    width = _image_width(width, 900, 2400)
+
     def run():
         import base64
         import tempfile
@@ -1404,8 +1446,42 @@ def view(graph, width=900):
     return call(run)
 
 
-LABTALK_DENY = ("doc -s", "doc -c", "saveas", "quit", "exitloop", "type -m", "openb", "run.x",
-                "close;", "close ", "system ", "shell ", "run.section", "run.open", "fopen")
+# Substring matching let 37 of 45 dangerous statements through (measured 2026-10-20):
+# `win -cd` destroyed a page, `doc -n` replaced the project, `run -p`/`run.file` run
+# external code, and `doc -o` bypassed the handle reset that origin_open performs.
+# These are anchored per statement (split on ';', newline and '{') with word
+# boundaries, so option spelling and whitespace no longer decide the outcome.
+LABTALK_DENY = ("saveas", "openb", "fopen", "exitloop")
+LABTALK_DENY_STATEMENTS = (
+    # Only `doc -a` (activate) is harmless; every other switch can save, replace,
+    # open or close the project. Inverting the match keeps unknown switches blocked.
+    (r"doc\s+-(?![aA](?:\s|;|$))", "doc 开关（-s 存、-n 新建、-o 打开都会丢当前工程；只放 -a）"),
+    (r"win\s+-c", "关闭/销毁页面（-c、-cd）"),
+    (r"(?:del|delete)(?:\s|$)", "删除数据集"),
+    (r"layer\s+-d", "删除图层"),
+    (r"page\s+-d", "删除页面"),
+    (r"(?:quit|exit)(?:\s|$)", "退出 Origin"),
+    (r"run(?:\.|\s+-)", "执行外部脚本或程序"),
+    (r"(?:system|shell)(?:\s|$)", "调用系统命令"),
+    (r"(?:rmdir|mkdir)(?:\s|$)", "创建/删除目录"),
+    (r"type\s+-", "type 开关（-a 会用外部程序打开文件）"),
+    (r"close(?:\s|$)", "关闭窗口"),
+)
+
+
+def labtalk_denied(script):
+    """Return the reasons a LabTalk script is refused (empty list = allowed).
+
+    Exposed as a function so the test suite exercises the same matcher the tool uses
+    instead of a copy that silently drifts.
+    """
+    low = re.sub(r"\s+", " ", str(script).lower())
+    blocked = [p for p in LABTALK_DENY if p in low]
+    statements = [st.strip() for st in re.split('[;\\n{}]', low) if st.strip()]
+    for rule, why in LABTALK_DENY_STATEMENTS:
+        if any(re.search(r"(?:^|[\s,(=])" + rule, st) for st in statements):
+            blocked.append(why)
+    return blocked
 
 
 def labtalk(script, readback=(), numeric=()):
@@ -1420,11 +1496,11 @@ def labtalk(script, readback=(), numeric=()):
     # Advisory guardrail, not a sandbox: it stops the model from wiping the
     # session by accident, not from trying hard. Whitespace is collapsed so
     # 'doc  -s' does not slip past the literal match.
-    low = re.sub(r"\s+", " ", str(script).lower())
-    blocked = [p for p in LABTALK_DENY if p in low]
+    blocked = labtalk_denied(script)
     if blocked:
         raise OriginError("labtalk_denied", "这些命令不允许通过 origin_labtalk 执行：%s" % blocked,
-                          ["关工程/退 Origin 请用 origin_exit 或 origin_save_project"])
+                          ["关工程/退 Origin 请用 origin_exit 或 origin_save_project",
+                           "句柄/页面管理用 origin_close_pages、保存用 origin_save_project"])
 
     def run():
         op = origin()
@@ -1569,6 +1645,7 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
 
 
 def export(graph, path="", fmt="png", width=1600):
+    width = _image_width(width, 1600, 12000)
     fmt = str(fmt).lstrip(".").lower()
     # Origin's export filter only recognises the short names: asking for a.tiff
     # leaves no file behind, which reads as a failed export.
@@ -1588,7 +1665,13 @@ def export(graph, path="", fmt="png", width=1600):
         raw_path = str(path or "").strip()
         target_path = _norm_target(raw_path or os.path.join(folder, "%s.%s" % (name, fmt)), fmt)
         _prepare_write(target_path)
-        _safe(lambda: page.save_fig(target_path))
+        # width only applies when a type is passed as well; the old call passed
+        # neither, so `width` never did anything (measured: 400 and 12000 both came
+        # back as the page size, 3216 px). Fall back to the plain call if the typed
+        # one does not produce a file.
+        _safe(lambda: page.save_fig(target_path, fmt, width=int(width)))
+        if not os.path.isfile(target_path):
+            _safe(lambda: page.save_fig(target_path))
         written, note = _written_or_mangled(target_path)
         if not written:
             raise OriginError("export_failed", "Origin 说导出了但文件不存在：%s" % target_path,
@@ -1600,6 +1683,11 @@ def export(graph, path="", fmt="png", width=1600):
                               ["图页可能是空的：origin_inspect 看 plots 数"])
         if note:
             info["warnings"] = [note]
+        dims = info.get("dimensions")
+        if dims and fmt == "png" and abs(int(dims[0]) - int(width)) > max(2, int(width) * 0.02):
+            # Tell the caller instead of pretending the request was honoured.
+            info["warnings"] = (info.get("warnings") or []) + [
+                "width=%d 没有生效：实际导出 %dx%d（Origin 对该图/滤镜接受了别的尺寸）" % (width, dims[0], dims[1])]
         rel = _rel_note(path)
         if rel:
             info["warnings"] = (info.get("warnings") or []) + [rel]
@@ -1694,6 +1782,7 @@ def open_project(path):
                                "Origin 版本低于该工程保存版本时也打不开",
                                "打开失败后旧句柄已作废，请重新 origin_inspect 看当前页面"])
         _project_file = path
+        _reset_growth()
         return sanitize({"opened": path, "open_pages": [p.name for p in op.pages()],
                          "handles_reset": True,
                          "note": "之前拿到的 ws-/gr- 句柄全部作废（工程换了页面），请用这里的页面名或重新导入"})
@@ -1741,6 +1830,7 @@ def exit_origin(save_to=""):
         _names.clear()
         _project_file = ""
         _reset_connection()
+        _reset_growth()
         return sanitize({"exited": True, "saved": saved})
 
     return call(run)
@@ -1873,6 +1963,9 @@ def matrix_plot(rows, template="heat_map", book_name="", graph_name="",
                "xlim": _safe(lambda: list(lay.xlim)), "ylim": _safe(lambda: list(lay.ylim)),
                "zlim": _safe(lambda: list(lay.zlim)),
                "proof_level": "verified"}
+        grown = _growth_warning()
+        if grown:
+            out.setdefault("warnings", []).append(grown)
         if export_path:
             out["export"] = _export_on_com_thread(gr, export_path)
         if project_path:
@@ -1979,6 +2072,8 @@ def close_pages(kind="graph", names=None, dry_run=False):
     for ref in [r for r, nm in _names.items() if nm and nm in closed]:
         _handles.pop(ref, None)
         _names.pop(ref, None)
+    if closed:
+        _reset_growth()
     return sanitize({"asked": wanted, "closed": closed,
                      "refused": [n for n in wanted if n not in closed],
                      "errors": errors,

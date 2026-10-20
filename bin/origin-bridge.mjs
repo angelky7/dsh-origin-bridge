@@ -22,10 +22,24 @@ const candidates = [
   'python',
 ].filter(Boolean);
 
+// Same environment the dsh patch sets, so logs are UTF-8 instead of the console
+// code page and the child flushes line by line.
+const env = { ...process.env };
+if (!env.PYTHONIOENCODING) env.PYTHONIOENCODING = 'utf-8';
+if (!env.PYTHONUNBUFFERED) env.PYTHONUNBUFFERED = '1';
+
 const child = spawn(
   candidates.find((c) => c === 'python' || existsSync(c)) || 'python',
-  ['-u', server],
-  { stdio: 'inherit', cwd: root },
+  ['-u', '-X', 'utf8', server],
+  { stdio: 'inherit', cwd: root, env },
 );
 
-child.on('exit', (code) => process.exit(code ?? 0));
+// A child killed by a signal is a crash, not a clean exit: reporting 0 here would
+// make an MCP client treat a dead server as "finished normally".
+child.on('exit', (code, signal) => {
+  if (signal) {
+    console.error(`[origin-bridge] python exited on ${signal}`);
+    process.exit(1);
+  }
+  process.exit(code ?? 1);
+});

@@ -90,18 +90,25 @@ $block += "        toolCallTimeoutMs: 180000`r`n"
 # second copy of the server to drift out of sync with C:\...\origin-bridge.
 $pkgName = 'dsh-origin-bridge'
 $pkgDir = Join-Path $profileDir "node_modules\$pkgName"
+# Read the real version instead of hard-coding it: the card in dsh shows this
+# value, and a stale 0.4.0 makes the installed plugin look ancient.
+$pkgVersion = '0.0.0'
+$manifest = Join-Path $src 'package.json'
+if (Test-Path $manifest) {
+    try { $pkgVersion = (Get-Content $manifest -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch { }
+}
 if (-not (Test-Path (Join-Path $pkgDir 'index.js'))) {
     New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-    @'
+    @"
 {
   "name": "dsh-origin-bridge",
-  "version": "0.4.0",
+  "version": "$pkgVersion",
   "description": "Origin Bridge: natural language" -> local Origin/OriginPro -> editable .opju + publication images",
   "main": "./index.js",
   "type": "module",
   "license": "MIT"
 }
-'@ | Set-Content -Path (Join-Path $pkgDir 'package.json') -Encoding ASCII
+"@ | Set-Content -Path (Join-Path $pkgDir 'package.json') -Encoding ASCII
     @'
 // Registration-only bundle. The Origin tools come from server.py in this
 // package's own folder, registered by the mcp-origin-bridge insert in the
@@ -125,6 +132,13 @@ $block += "    - id: $pkgName`r`n"
 $block += "      name: $pkgName`r`n"
 
 $existing = if (Test-Path $patch) { Get-Content $patch -Raw -Encoding UTF8 } else { '' }
+
+# A fresh dsh profile ships `cordis.patch.yml` containing just `[]` (plus comments).
+# Appending a `- insert:` entry after that produces TWO YAML documents and dsh
+# refuses to parse the overlay — the installer used to break a brand-new profile.
+# Treat a comments-only / empty-array file as empty so the block becomes the array.
+$meaningful = ($existing -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' }) -join "`n"
+if ($meaningful.Trim() -eq '[]' -or $meaningful.Trim() -eq '') { $existing = '' }
 
 # -RemoveOld: drop the previous plugin's insert block. Both entries pointed at
 # C:\...\originlab-bridge, and a dead stdio server still shows up as a tool

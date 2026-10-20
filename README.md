@@ -36,7 +36,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1126 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1126 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 521、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **364 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 37、smoke 129、edge 26、paths 28、json 18、readfile 12）**随包发布，你可以直接复跑**；那 1126 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1126 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1126 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 521、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **417 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 42、smoke 129、edge 26、paths 35、json 26、readfile 12、labtalk 33）**随包发布，你可以直接复跑**；那 1126 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -131,13 +131,14 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe edge_checks.py             # 26 项边界
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 30 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-.\.venv\Scripts\python.exe test_lifecycle.py          # 37 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
-.\.venv\Scripts\python.exe test_paths.py              # 28 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
-.\.venv\Scripts\python.exe test_json_safety.py        # 18 项，不需要 Origin：返回值必须是严格 JSON
+.\.venv\Scripts\python.exe test_lifecycle.py          # 42 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
+.\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
+.\.venv\Scripts\python.exe test_json_safety.py        # 26 项，不需要 Origin：返回值必须是严格 JSON
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
+.\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 364 项随包发布，你可以自己复跑。另外那 **1126 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 417 项随包发布，你可以自己复跑。另外那 **1126 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -276,6 +277,9 @@ Origin Bridge 的做法：
 | 装饰过的数值格子 | `<0.001`、`2.5±0.1`、`25 mV`、`1,234.5`、`2.5*`、`(500)`、`1e400` 这些形态此前让整列被判"全为空"直接丢弃——用户看到的是少一列数据，不是报错 | `cell_number` 逐形态解开并回一条 `warnings` 说明代入了什么；溢出/Infinity 一律按缺值，绝不把 inf 送出桥 |
 | 分隔符嗅探 | 欧陆 `Zeit;Signal / 0,0;1,5` 会被逗号拆开，而且错的拆法因为"列更多"在评分里胜出 | 评分改成：数值列数 → 行宽一致性 → 列数更少者优先；表头行不参与数值比 |
 | `origin_open` 与句柄 | 开工程会替换所有页面，之前发出去的 `ws-/gr-` 句柄全部指向已销毁的对象；死对象上的 `save_fig` 会"成功"但什么都不写（1124 例跑里正是它让连续三个导出失败） | `open_project` 成功与失败都清空句柄表并在返回里给 `handles_reset: true`；旧句柄再用会得到 `worksheet_not_found`/`graph_not_found`，不会静默操作死页面 |
+| LabTalk 黑名单 | 原来按子串匹配，2026-10-20 用 45 条高危语句实测 **37 条能过**：`win -cd` 销毁页面、`doc -n` 新建工程丢当前项目、`del/delete` 删数据集、`run -p`/`run.file` 执行外部程序、`exit`、以及能绕过句柄重置的 `doc -o` | 改成按语句（`;`/换行/`{}` 切分）+ 词边界规则：`doc -`、`win -c`、`del/delete`、`layer -d`、`page -d`、`quit/exit`、`run.`/`run -`、`system/shell`、`rmdir/mkdir`、`type -`、`close`、`saveas` 全拦；`test_labtalk_guard.py` 32 项锁住"该拦的拦、该放的放"。仍是劝告式护栏，不是沙箱 |
+| dsh 新 profile 的补丁模板 | `cordis.patch.yml` 模板内容就是一行 `[]`（顶层数组占位）。往它后面**追加** `- insert:` 会得到两个 YAML 文档，dsh 直接 `failed to parse overlay` 起不来——`install_dsh.ps1` 2026-10-20 前正是这样，全新环境按 README 用脚本装会把配置写坏 | 安装器现在把"只有注释/只有一个 `[]`"的文件当空文件处理，插块成为数组本身；装完会用 PyYAML 校验一次，解析失败就提示从备份恢复 |
+| `save_fig` 的 `width` | 传了也不生效：`save_fig(path)` 只有 path 时用页面尺寸，**必须同时给 type** 才认 width （实测 400 和 12000 导出都是 3216×2461、字节数相同）。我们的 `origin_export` 以前恰好只传 path | `save_fig(path, fmt, width=N)` + 缺文件时回退纯 path；PNG 导完比对 `dimensions.0` 与请求值，不一致就回 warning。题库宽度用例从"有 dimensions"改成**断言等于请求宽度** |
 | 非标准 JSON | `json.dumps` 默认把 inf/nan 写成裸 `Infinity`/`NaN`，那不是合法 JSON——dsh 侧整条响应解析失败，看起来像"桥挂了"而不是"一个数不对" | `sanitize()` 把 ±inf/nan 归 None；`server.py` 写出走 `allow_nan=False`，兜不住就降级成带原 id 的 JSON-RPC 错误；`smoke_test` 客户端用 `strict_loads` 拒绝，测试不会替产品掩盖它（`test_json_safety.py` 18 项） |
 
 ## 已知边界
@@ -287,7 +291,7 @@ Origin Bridge 的做法：
 - 交付路径：中文目录、中文文件名、含空格、200+ 字符长路径、自动建多级目录、`tiff→tif`/`jpeg→jpg` 改名——2026-10-12 在真机上逐条实测可用（PNG/TIF/PDF/SVG/EMF 和 `.opju` 都试过）。**不行的是网络路径**：UNC 与未映射盘返回 `bad_path`，不去猜认证。另有两条 Origin 自己的怪脾气已经兜住：文件名里的 `#` 会被导出滤镜换成编号（桥发现后会改名回你要的名字并在 `warnings` 里说明），路径组件尾部的空格/点会被 Windows 悄悄截掉（桥先截一遍再比较，不会报"文件不存在"）。
 - 千分位和逗号分隔符同形的文件（不加引号的 `0,1,234.5`）没法机械还原：桥按最宽行补齐并报"行长度不一致"，不会假装列数对得上。欧陆小数点（`0,5`）只在分隔符是 `;` 或 tab 时才认。
 - Origin 以管理员运行而 Python 不是（或反之）时 COM 连不上，两侧权限要一致。
-- 长会话攒太多页面会让 COM 桥报"无效指针"。`origin_close_pages` 能清，根治是 `origin_exit` 后重连。
+- 长会话攒太多页面会让 COM 桥报"无效指针"。`origin_close_pages` 能清，根治是 `origin_exit` 后重连。2026-10-20 实测到 300 页仍不崩，但每张图的耗时从 0.7 秒（前 100 页）涨到 2.8 秒（200–300 页）——所以 `origin_plot`/`origin_matrix` 每新建 50 个页面会在 `warnings` 里提醒一次（计数不花额外 COM 调用，`origin_close_pages`/`origin_exit`/`origin_open` 会清零）。
 - **Origin 实例不会跟着客户端退出**：originpro 需要时自己拉一个 Origin，Python 进程结束那个实例还在。攒够就会报"实例超过上限"。现在插件在进程退出时回收**自己起的、且没有窗口的**实例（`atexit`），历史残留用 `origin_reclaim` 清；有窗口的实例永远不动，因为那可能是你正开着的项目。
 - 统计批处理（t 检验 / ANOVA / PCA / 生存分析）没有，originpro 本身也不提供。
 - **无并发保护**：两个会话同时驱动 Origin 会互相踩。
@@ -324,7 +328,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 364 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 417 项离线与单元检查（随包发布）
 ```
 
 开发侧另有 `cases/` + `run_cases.py` 的 1126 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。

@@ -91,6 +91,60 @@ def main():
     ok("answered with a JSON-RPC error", payload.get("error", {}).get("code") == -32603, payload)
     ok("error keeps the request id", payload.get("id") == 7, payload)
 
+    # ------------------------------------------------ oversized request line
+    # A single enormous request must be refused without allocating it whole, and the
+    # stream has to resync so the NEXT request still works.
+    child2 = (
+        "import io, json, os, sys\n"
+        "sys.path.insert(0, os.environ['BRIDGE_DIR'])\n"
+        "import server\n"
+        "big = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list',"
+        " 'pad': 'x' * 9000}) + chr(10)\n"
+        "good = json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}) + chr(10)\n"
+        "sys.stdin = io.TextIOWrapper(io.BytesIO((big + good).encode('utf-8')), encoding='utf-8')\n"
+        "sys.exit(server.main() or 0)\n"
+    )
+    env2 = dict(env, ORIGIN_BRIDGE_MAX_LINE="4096")
+    proc2 = subprocess.run([sys.executable, "-c", child2], capture_output=True, env=env2, timeout=120)
+    lines2 = proc2.stdout.decode("utf-8", "replace").strip().splitlines()
+    ok("oversized request produced two replies", len(lines2) == 2, len(lines2))
+    first = {}
+    try:
+        first = strict(lines2[0])
+    except Exception as exc:  # noqa: BLE001
+        ok("refusal is parseable", False, exc)
+    ok("oversized request refused with -32600",
+       first.get("error", {}).get("code") == -32600, first)
+    second = {}
+    try:
+        second = strict(lines2[1])
+    except Exception:  # noqa: BLE001
+        pass
+    ok("stream resynced: the next request is answered",
+       bool((second.get("result") or {}).get("tools")), second)
+
+    # ------------------------------------------------ argument validation
+    # A wrong-typed argument used to reach the engine and surface as
+    # "origin_unavailable: TypeError", i.e. it blamed a missing Origin install.
+    import server as srv
+
+    def code_for(tool, args):
+        try:
+            srv._validate_args(tool, args, srv._BY_NAME[tool]["inputSchema"])
+        except srv.originlab.OriginError as exc:
+            return exc.code
+        return "no-raise"
+
+    ok("wrong-typed path is bad_arguments",
+       code_for("origin_import", {"path": 123}) == "bad_arguments")
+    ok("wrong-typed worksheet is bad_arguments",
+       code_for("origin_plot", {"worksheet": ["ws-1"]}) == "bad_arguments")
+    ok("boolean is not an integer",
+       code_for("origin_export", {"width": True}) == "bad_arguments")
+    ok("valid args pass", code_for("origin_import", {"path": "x.csv"}) == "no-raise")
+    ok("extra keys are tolerated",
+       code_for("origin_import", {"path": "x.csv", "bogus": 1}) == "no-raise")
+
     print("\n%d/%d json-safety checks passed" % (PASSED, PASSED + len(FAILED)))
     if FAILED:
         for f in FAILED:

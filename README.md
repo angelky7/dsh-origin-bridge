@@ -73,12 +73,11 @@ dsh plugin --profile desktop add dsh-origin-bridge
 > dsh plugin --profile desktop add file:C:\path\to\dsh-origin-bridge
 > ```
 
-两个包名指向同一个包，装哪个都行：
-
 ```bash
-dsh plugin --profile desktop add dsh-origin-bridge          # 正式包
-dsh plugin --profile desktop add @caob23/dsh-origin-bridge  # 转发壳，依赖上面那个
+dsh plugin --profile desktop add dsh-origin-bridge
 ```
+
+> 旧账号下的转发壳 `@caob23/dsh-origin-bridge` 已弃用（deprecated），请直接安装上面的正式包。
 
 本包是 bundle 包（`package.json` 的 `dsh.bundle.patch` 指向根目录的 `cordis.patch.yml`），`dsh plugin` 装完会自动把它加进 profile 的 `dsh.profile.bundles`，**重启 dsh 即加载**，不用再手写补丁。`dsh plugin` 转发给 pnpm，所以 pnpm 要在 PATH 上。
 

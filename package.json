@@ -6,12 +6,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/caob23/dsh-origin-bridge.git"
+    "url": "git+https://github.com/angelky7/dsh-origin-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/caob23/dsh-origin-bridge/issues"
+    "url": "https://github.com/angelky7/dsh-origin-bridge/issues"
   },
-  "homepage": "https://github.com/caob23/dsh-origin-bridge#readme",
+  "homepage": "https://github.com/angelky7/dsh-origin-bridge#readme",
   "main": "./index.js",
   "icon": "./icon.svg",
   "bin": {

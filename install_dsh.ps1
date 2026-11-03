@@ -99,16 +99,6 @@ if (Test-Path $manifest) {
 }
 if (-not (Test-Path (Join-Path $pkgDir 'index.js'))) {
     New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-    @"
-{
-  "name": "dsh-origin-bridge",
-  "version": "$pkgVersion",
-  "description": "Origin Bridge: natural language" -> local Origin/OriginPro -> editable .opju + publication images",
-  "main": "./index.js",
-  "type": "module",
-  "license": "MIT"
-}
-"@ | Set-Content -Path (Join-Path $pkgDir 'package.json') -Encoding ASCII
     @'
 // Registration-only bundle. The Origin tools come from server.py in this
 // package's own folder, registered by the mcp-origin-bridge insert in the
@@ -122,6 +112,19 @@ export default { name, activate, apply };
 '@ | Set-Content -Path (Join-Path $pkgDir 'index.js') -Encoding ASCII
     Write-Host "staged registration-only package -> $pkgDir"
 }
+# (Re)write package.json on every run: the 0.4.9-and-earlier text embedded raw
+# quotes in the description (unparseable JSON, so dsh could not read the card),
+# and a one-time write also left a stale version behind on re-install.
+@"
+{
+  "name": "dsh-origin-bridge",
+  "version": "$pkgVersion",
+  "description": "Origin Bridge: natural language -> local Origin/OriginPro -> editable .opju + publication images",
+  "main": "./index.js",
+  "type": "module",
+  "license": "MIT"
+}
+"@ | Set-Content -Path (Join-Path $pkgDir 'package.json') -Encoding ASCII
 
 $block += "`r`n# self-mount: makes $pkgName appear as its own card in dsh's plugin UI.`r`n"
 $block += "# apply() is a no-op; the tools come from the $entryId insert above.`r`n"

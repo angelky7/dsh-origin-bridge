@@ -35,7 +35,13 @@ const child = spawn(
 );
 
 // A child killed by a signal is a crash, not a clean exit: reporting 0 here would
-// make an MCP client treat a dead server as "finished normally".
+// make an MCP client treat a dead server as "finished normally". The 'error'
+// event (interpreter not found, no execute permission) is otherwise an unhandled
+// Node stack trace instead of a message the MCP client can show.
+child.on('error', (err) => {
+  console.error(`[origin-bridge] cannot start python (${candidates.join(', ')}): ${err.message}`);
+  process.exit(1);
+});
 child.on('exit', (code, signal) => {
   if (signal) {
     console.error(`[origin-bridge] python exited on ${signal}`);

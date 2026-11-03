@@ -145,6 +145,40 @@ def main():
     ok("extra keys are tolerated",
        code_for("origin_import", {"path": "x.csv", "bogus": 1}) == "no-raise")
 
+    # ------------------------------------------------ unknown tool / method
+    # A model hallucinating a tool name gets a named, actionable error — not a
+    # crash, not a silent null. Driven through the real stdio loop.
+    child3 = (
+        "import io, json, os, sys\n"
+        "sys.path.insert(0, os.environ['BRIDGE_DIR'])\n"
+        "import server\n"
+        "a = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',\n"
+        "     'params': {'name': 'origin_frobnicate', 'arguments': {}}}\n"
+        "b = {'jsonrpc': '2.0', 'id': 2, 'method': 'no/such/method'}\n"
+        "reqs = json.dumps(a) + chr(10) + json.dumps(b) + chr(10)\n"
+        "sys.stdin = io.TextIOWrapper(io.BytesIO(reqs.encode('utf-8')), encoding='utf-8')\n"
+        "sys.exit(server.main() or 0)\n"
+    )
+    proc3 = subprocess.run([sys.executable, "-c", child3], capture_output=True, env=env, timeout=120)
+    lines3 = proc3.stdout.decode("utf-8", "replace").strip().splitlines()
+    ok("unknown tool + unknown method answered", len(lines3) == 2, len(lines3))
+    r1, r2 = {}, {}
+    try:
+        r1, r2 = strict(lines3[0]), strict(lines3[1])
+    except Exception as exc:  # noqa: BLE001
+        ok("both replies parseable", False, exc)
+    res1 = (r1.get("result") or {})
+    body1 = {}
+    try:
+        body1 = json.loads(res1.get("content", [{}])[0].get("text", "{}"))
+    except ValueError:
+        pass
+    ok("unknown tool -> isError with code unknown_tool",
+       res1.get("isError") is True and body1.get("code") == "unknown_tool",
+       (res1, body1))
+    ok("unknown method -> JSON-RPC -32601",
+       (r2.get("error") or {}).get("code") == -32601, r2)
+
     print("\n%d/%d json-safety checks passed" % (PASSED, PASSED + len(FAILED)))
     if FAILED:
         for f in FAILED:

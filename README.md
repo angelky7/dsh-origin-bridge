@@ -11,12 +11,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>1126 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>27 个工具 · <b>1135 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1126%2F1126%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1135%2F1135%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -36,7 +36,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1126 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1126 通过 / 0 失败**：27 个工具每个至少 15 例、最多 134 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 521、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **417 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 42、smoke 129、edge 26、paths 35、json 26、readfile 12、labtalk 33）**随包发布，你可以直接复跑**；那 1126 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1135 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1135 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 530、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **420 项**离线/单元/边界检查（asciiio 84、binio 30、lifecycle 42、smoke 129、edge 26、paths 35、json 29、readfile 12、labtalk 33）**随包发布，你可以直接复跑**；那 1135 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -132,12 +132,12 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe test_binio.py              # 30 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
 .\.venv\Scripts\python.exe test_lifecycle.py          # 42 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
 .\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
-.\.venv\Scripts\python.exe test_json_safety.py        # 26 项，不需要 Origin：返回值必须是严格 JSON
+.\.venv\Scripts\python.exe test_json_safety.py        # 29 项，不需要 Origin：返回值必须是严格 JSON
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 417 项随包发布，你可以自己复跑。另外那 **1126 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 420 项随包发布，你可以自己复跑。另外那 **1135 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -279,7 +279,7 @@ Origin Bridge 的做法：
 | LabTalk 黑名单 | 原来按子串匹配，2026-10-20 用 45 条高危语句实测 **37 条能过**：`win -cd` 销毁页面、`doc -n` 新建工程丢当前项目、`del/delete` 删数据集、`run -p`/`run.file` 执行外部程序、`exit`、以及能绕过句柄重置的 `doc -o` | 改成按语句（`;`/换行/`{}` 切分）+ 词边界规则：`doc -`、`win -c`、`del/delete`、`layer -d`、`page -d`、`quit/exit`、`run.`/`run -`、`system/shell`、`rmdir/mkdir`、`type -`、`close`、`saveas` 全拦；`test_labtalk_guard.py` 32 项锁住"该拦的拦、该放的放"。仍是劝告式护栏，不是沙箱 |
 | dsh 新 profile 的补丁模板 | `cordis.patch.yml` 模板内容就是一行 `[]`（顶层数组占位）。往它后面**追加** `- insert:` 会得到两个 YAML 文档，dsh 直接 `failed to parse overlay` 起不来——`install_dsh.ps1` 2026-10-20 前正是这样，全新环境按 README 用脚本装会把配置写坏 | 安装器现在把"只有注释/只有一个 `[]`"的文件当空文件处理，插块成为数组本身；装完会用 PyYAML 校验一次，解析失败就提示从备份恢复 |
 | `save_fig` 的 `width` | 传了也不生效：`save_fig(path)` 只有 path 时用页面尺寸，**必须同时给 type** 才认 width （实测 400 和 12000 导出都是 3216×2461、字节数相同）。我们的 `origin_export` 以前恰好只传 path | `save_fig(path, fmt, width=N)` + 缺文件时回退纯 path；PNG 导完比对 `dimensions.0` 与请求值，不一致就回 warning。题库宽度用例从"有 dimensions"改成**断言等于请求宽度** |
-| 非标准 JSON | `json.dumps` 默认把 inf/nan 写成裸 `Infinity`/`NaN`，那不是合法 JSON——dsh 侧整条响应解析失败，看起来像"桥挂了"而不是"一个数不对" | `sanitize()` 把 ±inf/nan 归 None；`server.py` 写出走 `allow_nan=False`，兜不住就降级成带原 id 的 JSON-RPC 错误；`smoke_test` 客户端用 `strict_loads` 拒绝，测试不会替产品掩盖它（`test_json_safety.py` 18 项） |
+| 非标准 JSON | `json.dumps` 默认把 inf/nan 写成裸 `Infinity`/`NaN`，那不是合法 JSON——dsh 侧整条响应解析失败，看起来像"桥挂了"而不是"一个数不对" | `sanitize()` 把 ±inf/nan 归 None；`server.py` 写出走 `allow_nan=False`，兜不住就降级成带原 id 的 JSON-RPC 错误；`smoke_test` 客户端用 `strict_loads` 拒绝，测试不会替产品掩盖它（`test_json_safety.py` 29 项，含幻觉工具名与未知方法的协议层断言） |
 
 ## 已知边界
 
@@ -327,10 +327,10 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 417 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 420 项离线与单元检查（随包发布）
 ```
 
-开发侧另有 `cases/` + `run_cases.py` 的 1126 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。
+开发侧另有 `cases/` + `run_cases.py` 的 1135 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。
 

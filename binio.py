@@ -123,10 +123,14 @@ def expected_points(params, positive_first=True):
     step = params["interval"]
     if high <= low or step <= 0:
         return 0
+    # segments is a raw float from the header with no plausibility filter of its
+    # own; a garbage value like 1e11 would make this loop for days on the COM
+    # thread and wedge the whole bridge. Real methods are two-digit.
+    segments = min(max(1, int(params["segments"])), 100000)
     total = 0
     e = init
     d = 1 if positive_first else -1
-    for _ in range(max(1, int(params["segments"]))):
+    for _ in range(segments):
         limit = high if d > 0 else low
         steps = int(round(abs(limit - e) / step))
         if steps <= 0:
@@ -152,6 +156,11 @@ def read_bin(path):
         buf = fh.read()
     if not buf.startswith(MAGIC):
         raise BinFormatError("文件头不是 %s，这不是电化学工作站的 .bin" % MAGIC.hex())
+    if len(buf) < 16:
+        # A file with the magic but nothing else must fail HERE: _u32(buf, 4)
+        # below would otherwise raise a bare struct.error that the callers
+        # (they catch BinFormatError) report as internal_error.
+        raise BinFormatError("文件只有 %d 字节，头部都不完整，不是有效的 .bin" % len(buf))
     tag, name, build = _technique(buf)
     nseg = _u32(buf, 4)
     total, start = _find_stream(buf)

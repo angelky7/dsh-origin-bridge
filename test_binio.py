@@ -110,6 +110,25 @@ try:
 except binio.BinFormatError as exc:
     check("non-workstation .bin rejected", "文件头" in str(exc), str(exc)[:60])
 
+p4 = os.path.join(FIX, "truncated.bin")
+with open(p4, "wb") as fh:
+    fh.write(binio.MAGIC + b"\x02\x00")   # magic + 2 bytes: too short for _u32(buf, 4)
+try:
+    binio.read_bin(p4)
+    check("truncated .bin raises BinFormatError", False, "no error raised")
+except binio.BinFormatError as exc:
+    check("truncated .bin raises BinFormatError", "不完整" in str(exc), str(exc)[:60])
+except Exception as exc:
+    check("truncated .bin raises BinFormatError", False, repr(exc)[:80])
+
+# A garbage header must not hang the caller: segments is a raw header float.
+import time
+t0 = time.time()
+n = binio.expected_points({"init": 0.0, "high": 1.0, "low": -1.0,
+                           "segments": 1e11, "interval": 0.01}, True)
+check("garbage segments is clamped, not a day-long loop",
+      time.time() - t0 < 5.0 and n > 0, (n, round(time.time() - t0, 3)))
+
 
 def txt_rows(fn):
     rows = []

@@ -1584,6 +1584,13 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
                           % sorted(FIT_PRESETS))
     if kind == "nlfitsing" and str(func).lower() in FIT_PRESETS:
         func = FIT_PRESETS[str(func).lower()]
+    for name, pair in (bounds or {}).items():
+        # A wrong-typed pair used to be dropped silently: the fit ran with no
+        # bounds and only a lo/hi:null note hinted at it.
+        if not isinstance(pair, (list, tuple)) or not pair:
+            raise OriginError("bad_arguments",
+                              "bounds 的值要是 [下界, 上界]，参数 %s 收到 %r" % (name, pair),
+                              ['如 {"y0": [0, null]}，null 表示不设该侧'])
 
     def run():
         op = origin()
@@ -1928,6 +1935,19 @@ def matrix_plot(rows, template="heat_map", book_name="", graph_name="",
     widths = {len(r) for r in rows if isinstance(r, (list, tuple))}
     if len(widths) != 1 or not widths.pop():
         raise OriginError("bad_arguments", "矩阵每行宽度必须一致且非空")
+    for r in rows:
+        for v in r:
+            # A text cell used to die as float('x') inside run() and surface as
+            # internal_error; type-check it here instead, before any COM work.
+            if v is not None and not isinstance(v, (int, float)):
+                raise OriginError("bad_arguments",
+                                  "rows 里有不是数字的格子：%r（缺值请写 null）" % (v,))
+    if xy_range is not None:
+        ok_xy = isinstance(xy_range, (list, tuple)) and len(xy_range) == 4 and all(
+            v is None or isinstance(v, (int, float)) for v in xy_range)
+        if not ok_xy:
+            raise OriginError("bad_arguments",
+                              "xy_range 要 4 个数：[x1,x2,y1,y2]，收到 %r" % (xy_range,))
 
     def run():
         import numpy as np
@@ -1938,10 +1958,7 @@ def matrix_plot(rows, template="heat_map", book_name="", graph_name="",
         ms = mb[0]
         ms.from_np(arr, mv=np.nan)
         if xy_range:
-            xy = [float(v) for v in xy_range]
-            if len(xy) != 4:
-                raise OriginError("bad_arguments", "xy_range 要 4 个数：[x1,x2,y1,y2]")
-            ms.xymap = xy
+            ms.xymap = [float(v) for v in xy_range]
         mapped = _safe(lambda: list(ms.xymap), [])
         gr = op.new_graph(graph_name or "", template=tpl)
         if gr is None:

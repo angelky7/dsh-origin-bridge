@@ -149,6 +149,19 @@ def main():
     check("exit then auto-reconnect", ex.get("exited") and after.get("connected") is True,
           (ex.get("exited"), after.get("connected"), after.get("code")))
 
+    # 9b) matrix arg validation happens before any COM work, so a garbage grid
+    # must come back as named bad_arguments even when Origin is wedged.
+    bad = rpc.tool("origin_matrix", {"rows": [[1, 2], [3, "x"]]}, timeout=60)
+    check("matrix text cell -> bad_arguments",
+          bad.get("code") == "bad_arguments" and bad.get("ok") is False,
+          (bad.get("code"), str(bad.get("message"))[:60]))
+    bad = rpc.tool("origin_matrix", {"rows": [[1, 2]], "xy_range": "0 1 0 1"}, timeout=60)
+    check("matrix string xy_range -> bad_arguments",
+          bad.get("code") == "bad_arguments", (bad.get("code"), str(bad.get("message"))[:60]))
+    bad = rpc.tool("origin_matrix", {"rows": [[1, 2]], "xy_range": [0, 1, 0]}, timeout=60)
+    check("matrix 3-value xy_range -> bad_arguments",
+          bad.get("code") == "bad_arguments", (bad.get("code"), str(bad.get("message"))[:60]))
+
     rpc.close()
 
     # 10) the node launcher shipped in bin/ must actually start the server

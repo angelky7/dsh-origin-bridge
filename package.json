@@ -61,6 +61,7 @@
     "requirements.txt",
     "sample.dat",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "dsh": {

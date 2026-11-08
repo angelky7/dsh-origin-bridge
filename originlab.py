@@ -393,6 +393,11 @@ def _close_pid(pid):
     _terminate(pid)
     for _ in range(6):
         time.sleep(0.5)
+        # A close that Origin refuses (the controlling client is still attached —
+        # possibly someone else's) parks the "正由另一个程序控制" box on screen for
+        # as long as we keep polling. Clicking 确定 does not make Origin exit, but
+        # it does stop the box from sitting there until the force-kill lands.
+        _dismiss_busy_dialogs(pid)
         rows = _process_rows()
         if rows is None:
             continue  # probe failed; keep polling rather than guessing "gone"
@@ -454,6 +459,13 @@ def reclaim(close_background=True):
     for row in back:
         pid = row["pid"]
         try:
+            if pid in _started_pids:
+                # Reclaiming the instance WE are attached to: a WM_CLOSE while our
+                # COM connection is alive parks the "正由另一个程序控制" box on
+                # screen until the force-kill lands. Dropping the cached pointer
+                # first (same thread that attached — this runs inside call())
+                # makes the same close exit clean in about a second.
+                _reset_connection()
             outcome = _close_pid(pid)
         except Exception as exc:
             result["left_running"].append(pid)
@@ -480,6 +492,11 @@ def _release_on_exit():
         rows = _process_rows()
         if rows is None:
             return  # cannot tell which pids are ours; leaving Origin is the safe error
+        # A WM_CLOSE that lands while we still hold the COM connection makes Origin
+        # raise the "正由另一个程序控制" box and refuse to exit — visible even for a
+        # windowless instance (probe 2026-11-08: box up ~12 s until force-kill;
+        # after dropping the cached pointer the same close exits clean in ~1 s).
+        _reset_connection()
         for row in rows:
             if row["pid"] in _started_pids and not row["window"]:
                 _close_pid(row["pid"])

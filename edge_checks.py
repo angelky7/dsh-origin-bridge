@@ -225,6 +225,48 @@ def main():
     else:
         print("SKIP  node launcher (node not on PATH)")
 
+    # 11) teardown regression: a client that exits gracefully must close its own
+    # windowless Origin without parking the "正由另一个程序控制" box on screen.
+    # The child attaches like a real session, then just ends; its atexit has to
+    # drop the COM refs BEFORE the close request, or the box shows up here.
+    child = (
+        "import os, sys, time\n"
+        "sys.path.insert(0, os.environ['BRIDGE_DIR'])\n"
+        "import originlab\n"
+        "originlab.call(lambda: originlab.origin().path())\n"
+        "time.sleep(0.5)\n"
+        "rows = originlab._process_rows() or []\n"
+        "ours = [r['pid'] for r in rows if r['pid'] in originlab._started_pids and not r['window']]\n"
+        "print('PID %d' % ours[0] if ours else 'PID NONE', flush=True)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", child], env=dict(os.environ, BRIDGE_DIR=HERE),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8")
+    target = None
+    boxes = []
+    gone = False
+    t0 = time.time()
+    try:
+        for line in proc.stdout:
+            if line.startswith("PID "):
+                target = int(line.split()[1]) if line.split()[1] != "NONE" else None
+                break
+        while target and time.time() - t0 < 30:
+            rr = S.originlab._process_rows() or []
+            if not any(r["pid"] == target for r in rr):
+                gone = True
+                break
+            boxes.extend(b["body"].replace("\n", " ")[:44]
+                         for b in S.originlab._busy_dialogs(target))
+            time.sleep(0.4)
+        proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    check("teardown 关得快且全程无 busy 弹窗",
+          gone and not boxes and target is not None,
+          (target, gone, boxes[:2]))
+
     bad = [n for n, ok in results if not ok]
     # Same teardown as smoke_test: reclaim only the windowless instances this run
     # started; an older one may belong to a live dsh session.

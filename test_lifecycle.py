@@ -283,6 +283,36 @@ finally:
     _shutil.rmtree(_lockdir, ignore_errors=True)
 
 print()
+print("_close_pid 轮询时持续消解 busy 弹窗（桩，不碰 COM）:")
+_saved_close = (originlab._process_rows, originlab._terminate, originlab._dismiss_busy_dialogs)
+_log = []
+_polls = {"n": 0}
+
+
+def _fake_rows():
+    _polls["n"] += 1
+    return [{"pid": 4242, "started": "", "window": 0}] if _polls["n"] < 3 else []
+
+
+def _fake_term(pid, force=False):
+    _log.append("force" if force else "term")
+
+
+def _fake_sweep(pid):
+    _log.append("sweep")
+    return []
+
+
+try:
+    originlab._process_rows, originlab._terminate, originlab._dismiss_busy_dialogs = (
+        _fake_rows, _fake_term, _fake_sweep)
+    _out = originlab._close_pid(4242)
+finally:
+    originlab._process_rows, originlab._terminate, originlab._dismiss_busy_dialogs = _saved_close
+
+check("轮询期每轮都消解、干净退出",
+      _out == "closed" and _log.count("sweep") >= 2 and _log[0] == "term", (_out, _log))
+
 print()
 print("busy-dialog finder（真窗口，不碰 COM）:")
 if os.name == "nt":

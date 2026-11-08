@@ -197,14 +197,18 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "graph": {"type": "string"},
-                "path": {"type": "string", "description": "输出文件绝对路径；省略则用图页名放到当前目录"},
+                "path": {"type": "string", "description": "输出文件绝对路径；all_graphs=true 时是目标目录（每个图页导成 <页名>.<fmt>）"},
                 "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
                         "default": "png"},
                 "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
+                "all_graphs": {"type": "boolean", "default": False,
+                               "description": "true：把工程里所有图页一次性导出到 path 目录，逐页验证；path 是目录"},
             },
         },
-        "run": lambda a: originlab.export(a.get("graph", ""), a.get("path", ""),
-                                          a.get("fmt", "png"), a.get("width", 1600)),
+        "run": lambda a: (originlab.export_all(a.get("path", ""), a.get("fmt", "png"), a.get("width", 1600))
+                          if a.get("all_graphs")
+                          else originlab.export(a.get("graph", ""), a.get("path", ""),
+                                                a.get("fmt", "png"), a.get("width", 1600))),
     },
     {
         "name": "origin_save_project",

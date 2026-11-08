@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>1136 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>27 个工具 · <b>1138 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1136%2F1136%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1138%2F1138%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -40,7 +40,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1136 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1136 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **418 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 51、smoke 129、edge 30、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1136 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1138 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1138 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 165、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **420 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 51、smoke 129、edge 32、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1138 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -131,7 +131,7 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 项，看到 ALL GOOD 才算过
-.\.venv\Scripts\python.exe edge_checks.py             # 30 项边界
+.\.venv\Scripts\python.exe edge_checks.py             # 32 项边界
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 15 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
 .\.venv\Scripts\python.exe test_lifecycle.py          # 51 项，不需要 Origin：实例分类/回收/掉线重连/会话锁的安全边界
@@ -141,7 +141,7 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 418 项随包发布，你可以自己复跑。另外那 **1136 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 420 项随包发布，你可以自己复跑。另外那 **1138 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -206,7 +206,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 | `origin_chart_preset` | 单个预设的完整约定：要哪些列、默认轴标题、建议拟合、轴向提示 |
 | `origin_chart_check` | 拿数据列名对预设做 dry-run，不碰 Origin |
 | `origin_chart_render` | 按预设一步出图（轴标题/图类型/图例/图片/opju） |
-| `origin_export` | 出图，带文件存在/体积/文件头校验，PNG 还回读宽高 |
+| `origin_export` | 出图，带文件存在/体积/文件头校验，PNG 还回读宽高；`all_graphs=true` 一次把工程里所有图页导出到目录（逐页验证，单页失败不拖累其余） |
 | `origin_view` | 把图渲染成小图以 **MCP image content 回传给模型自己看** |
 | `origin_save_project` | 存 `.opju`（可编辑工程，不是截图） |
 | `origin_open` | 打开已有工程 |
@@ -333,11 +333,11 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 418 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 420 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 
-开发侧另有 `cases/` + `run_cases.py` 的 1136 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）；题库每跑完一次会自动核对本文的全部数字（`verify_readme_claims`），对不上就以实测为准。
+开发侧另有 `cases/` + `run_cases.py` 的 1138 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）；题库每跑完一次会自动核对本文的全部数字（`verify_readme_claims`），对不上就以实测为准。
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。
 

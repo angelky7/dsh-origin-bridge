@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 tools · <b>1136/1136 full-chain tests passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
+  <sub>27 tools · <b>1138/1138 full-chain tests passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
 </p>
 
 <p align="center">
   <a href="#requirements"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1136%2F1136%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1138%2F1138%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -32,7 +32,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **1000+ real tests, not a claim.** 1136 full-chain cases run against a real stdio server + local OriginPro — 1136 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 163, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **418** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 51, smoke 129, edge 30, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1136-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
+- **1000+ real tests, not a claim.** 1138 full-chain cases run against a real stdio server + local OriginPro — 1138 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 165, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **420** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 51, smoke 129, edge 32, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1138-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
 
 ## What it can do
 
@@ -112,7 +112,7 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 checks, needs Origin
-.\.venv\Scripts\python.exe edge_checks.py             # 30 checks, needs Origin
+.\.venv\Scripts\python.exe edge_checks.py             # 32 checks, needs Origin
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 checks, Origin-free
 .\.venv\Scripts\python.exe test_binio.py              # 15 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
 .\.venv\Scripts\python.exe test_lifecycle.py          # 51 checks, Origin-free
@@ -145,7 +145,7 @@ For dsh registration from a source checkout, run `install_dsh.ps1` (backs up you
 | `origin_chart_preset` | One preset's full contract: required columns, default titles, suggested fit |
 | `origin_chart_check` | Dry-run a preset's column expectations against your data, no Origin involved |
 | `origin_chart_render` | One call: preset → styled figure (titles/kind/legend/image/opju) |
-| `origin_export` | Export with existence/size/magic verification; PNG dimensions are read back |
+| `origin_export` | Export with existence/size/magic verification; PNG dimensions are read back; `all_graphs: true` exports every graph page into a directory in one call, each verified |
 | `origin_view` | Render the graph and return it **as MCP image content the model can see** |
 | `origin_save_project` | Save an editable `.opju` project |
 | `origin_open` | Open an existing project |

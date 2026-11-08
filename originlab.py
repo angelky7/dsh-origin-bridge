@@ -1678,6 +1678,88 @@ def view(graph, width=900):
     return call(run)
 
 
+def export_all(directory, fmt="png", width=1600):
+    """Export every graph page in the project into `directory`.
+
+    One call instead of N: a lab session with five figures should not need five
+    origin_export round-trips. Each file is named after its page (Origin page
+    names are unique inside a project) and verified individually — a page whose
+    export silently failed lands in `failed`, it does not fail the batch.
+    """
+    width = _image_width(width, 1600, 12000)
+    fmt = str(fmt).lstrip(".").lower()
+    fmt = {"tiff": "tif", "jpeg": "jpg"}.get(fmt, fmt)
+    if fmt not in ("png", "tif", "jpg", "svg", "pdf", "emf"):
+        raise OriginError("bad_format", "fmt 只支持 png/tif/jpg/svg/pdf/emf，收到 %s" % fmt)
+    if not str(directory or "").strip():
+        raise OriginError("bad_path", "all_graphs 导出需要 path 给一个目标目录",
+                          ["例如 path: r\"D:\\out\"，每个图页导成 <页名>.<fmt>"])
+
+    def prepare_dir():
+        folder = os.path.abspath(os.path.expanduser(str(directory).strip()))
+        parts = [p for p in folder.replace("/", "\\").split("\\") if p not in ("", ".")]
+        if not parts or any(p.rstrip(" .") == "" for p in parts[1:]):
+            raise OriginError("bad_path", "目录路径不对：%r" % directory)
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            raise OriginError("bad_path", "目录建不出来：%s（%s）" % (folder, exc.strerror or exc),
+                              ["换一个可写的目录"])
+        if not os.path.isdir(folder):
+            raise OriginError("bad_path", "路径不是目录：%s" % folder)
+        return folder
+
+    def run():
+        op = origin()
+        folder = prepare_dir()
+        # pages() is a generator (measured: a second iteration yields nothing),
+        # so land it immediately; only graph pages export.
+        pages = list(_safe(lambda: op.pages("g"), []) or [])
+        pages = [p for p in pages if type(p).__name__ == "GPage"]
+        if not pages:
+            raise OriginError("no_graphs", "工程里没有图页可导出",
+                              ["先 origin_plot 或 origin_open 一个有图的工程",
+                               "origin_inspect 看当前有哪些页面"])
+        exported, failed = [], []
+        for page in pages:
+            name = _safe(lambda p=page: p.name, "")
+            target = os.path.join(folder, "%s.%s" % (name or "Graph", fmt))
+            try:
+                _prepare_write(target)
+                _safe(lambda p=page, t=target: p.save_fig(t, fmt, width=int(width)))
+                if not os.path.isfile(target):
+                    _safe(lambda p=page, t=target: p.save_fig(t))
+                written, note = _written_or_mangled(target)
+                if not written:
+                    raise OriginError("export_failed", "Origin 说导出了但文件不存在：%s" % target)
+                info = _verify_file(written, must_be_image=fmt in IMAGE_MAGIC)
+                if not info["ok"]:
+                    raise OriginError("export_suspect", "导出文件异常：%s" % info)
+                item = {"graph": name, "file": written, "bytes": info["bytes"]}
+                if info.get("dimensions"):
+                    item["dimensions"] = info["dimensions"]
+                if note:
+                    item["warnings"] = [note]
+                exported.append(item)
+            except OriginError as exc:
+                failed.append({"graph": name, "code": exc.code,
+                               "message": str(exc)[:120]})
+        result = {"directory": folder, "fmt": fmt, "width": int(width),
+                  "exported": exported, "failed": failed,
+                  "proof_level": "verified" if exported and not failed else
+                                 ("partial" if exported else "unverified"),
+                  "note": "每个文件都验过存在、体积与文件头；单页失败不影响其余页面"}
+        if failed:
+            result["next_actions"] = ["origin_inspect 看失败的页面是否完好",
+                                      "对失败的单页改用 origin_export 重试"]
+        grown = _growth_warning()
+        if grown:
+            result.setdefault("warnings", []).append(grown)
+        return sanitize(result)
+
+    return call(run)
+
+
 # Substring matching let 37 of 45 dangerous statements through (measured 2026-10-20):
 # `win -cd` destroyed a page, `doc -n` replaced the project, `run -p`/`run.file` run
 # external code, and `doc -o` bypassed the handle reset that origin_open performs.

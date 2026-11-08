@@ -149,6 +149,22 @@ def main():
     check("exit then auto-reconnect", ex.get("exited") and after.get("connected") is True,
           (ex.get("exited"), after.get("connected"), after.get("code")))
 
+    # 9a) batch export against a fresh (empty) project and then a real one.
+    no = rpc.tool("origin_export", {"path": os.path.join(SANDBOX, "all_empty"),
+                                    "all_graphs": True}, timeout=120)
+    check("export_all on empty project -> no_graphs", no.get("code") == "no_graphs",
+          (no.get("code"), str(no.get("message"))[:60]))
+    imp = rpc.tool("origin_import", {"path": os.path.join(HERE, "sample.dat")}, timeout=200)
+    pl = rpc.tool("origin_plot", {"worksheet": imp["worksheet"], "x": 1, "y": 2}, timeout=200)
+    batch = rpc.tool("origin_export", {"path": os.path.join(SANDBOX, "all_out"),
+                                       "all_graphs": True, "fmt": "png"}, timeout=240)
+    items = batch.get("exported") or []
+    ok_files = [i for i in items if os.path.isfile(i.get("file", ""))]
+    check("export_all writes every graph page",
+          batch.get("ok") is True and len(items) >= 1 and len(ok_files) == len(items),
+          (batch.get("code"), len(items), len(ok_files)))
+    rpc.tool("origin_close_pages", {"kind": "graph"}, timeout=120)
+
     # 9b) matrix arg validation happens before any COM work, so a garbage grid
     # must come back as named bad_arguments even when Origin is wedged.
     bad = rpc.tool("origin_matrix", {"rows": [[1, 2], [3, "x"]]}, timeout=60)

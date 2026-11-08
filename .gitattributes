@@ -15,3 +15,7 @@
 *.pdf binary
 *.bin binary
 *.opju binary
+fixtures/*.dat -text
+fixtures/*.csv -text
+fixtures/*.txt -text
+fixtures/*.bin -text

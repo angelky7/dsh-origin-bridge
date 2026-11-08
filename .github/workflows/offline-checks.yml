@@ -30,14 +30,18 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: install test dependencies
         run: python -m pip install --upgrade pip numpy
-      - name: parser, paths, JSON, read_file
-        run: |
-          python test_asciiio.py
-          python test_binio.py
-          python test_paths.py
-          python test_json_safety.py
-          python test_readfile.py
-          python test_labtalk_guard.py
+      - name: asciiio parser
+        run: python test_asciiio.py
+      - name: binio workstation reader
+        run: python test_binio.py
+      - name: path normalization
+        run: python test_paths.py
+      - name: JSON strictness
+        run: python test_json_safety.py
+      - name: read_file shaping
+        run: python test_readfile.py
+      - name: LabTalk deny matcher
+        run: python test_labtalk_guard.py
       - name: lifecycle classification (no Origin needed)
         run: python test_lifecycle.py
       - name: README coverage claims match the measured suites

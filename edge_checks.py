@@ -163,6 +163,30 @@ def main():
     check("export_all writes every graph page",
           batch.get("ok") is True and len(items) >= 1 and len(ok_files) == len(items),
           (batch.get("code"), len(items), len(ok_files)))
+
+    # 9b) a page whose target is unwritable lands in `failed` without dragging
+    # the batch down. The plotted page's name is known from the plot response.
+    import stat as _stat
+    page_name = pl.get("graph_page") or "Graph1"
+    fail_dir = os.path.join(SANDBOX, "all_fail")
+    os.makedirs(fail_dir, exist_ok=True)
+    blocker = os.path.join(fail_dir, page_name + ".png")
+    with open(blocker, "wb") as fh:
+        fh.write(b"placeholder")
+    os.chmod(blocker, _stat.S_IREAD)
+    try:
+        bf = rpc.tool("origin_export", {"path": fail_dir, "all_graphs": True}, timeout=240)
+        failed = bf.get("failed") or []
+        check("export_all reports the blocked page in failed",
+              bf.get("ok") is True and len(failed) >= 1
+              and failed[0].get("code") == "target_locked",
+              (bf.get("code"), [(f.get("graph"), f.get("code")) for f in failed]))
+        check("blocked page does not drag other pages",
+              (bf.get("proof_level") in ("partial", "unverified")),
+              bf.get("proof_level"))
+    finally:
+        os.chmod(blocker, _stat.S_IWRITE)
+
     rpc.tool("origin_close_pages", {"kind": "graph"}, timeout=120)
 
     # 9b) matrix arg validation happens before any COM work, so a garbage grid

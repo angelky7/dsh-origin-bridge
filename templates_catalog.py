@@ -15,13 +15,17 @@ editaplot project. Each template declares:
 
 This module exposes:
 - TEMPLATES: list of template dicts
+- list_templates(category): names grouped by category
 - describe_template(name): return contract for one
 - validate_data_shape(name, data, columns): dry-run check
-- render_template(name, data, columns, output_dir, gtitle=None): end-to-end render
+
+render_template used to live here too, but it called op.new() (throwing away
+whatever the user had open) and imported a fit module this package never had;
+the bridge renders presets through originlab.chart_render instead, so the dead
+code was removed (2026-11-08).
 """
 from __future__ import annotations
 import os
-import numpy as np
 from typing import Dict, List, Optional, Any
 
 
@@ -591,164 +595,3 @@ def validate_data_shape(name: str, data: Any) -> Dict[str, Any]:
     return result
 
 
-def render_template(name: str, data_path: str, output_dir: str,
-                    gtitle: Optional[str] = None,
-                    xtitle: Optional[str] = None,
-                    ytitle: Optional[str] = None,
-                    xrange: Optional[tuple] = None,
-                    yrange: Optional[tuple] = None,
-                    xinc: Optional[float] = None,
-                    yinc: Optional[float] = None,
-                    do_fit: bool = True) -> Dict[str, Any]:
-    """End-to-end: load .dat, apply template, render chart.
-
-    Returns:
-        dict with output paths (png, opju if saved)
-    """
-    import originpro as op
-    from .io import read_dat
-    from .templates import cn
-
-    tpl = describe_template(name)
-    if tpl is None:
-        return {'status': 'error', 'message': f'unknown template: {name}'}
-
-    # Load
-    longs, units, d = read_dat(data_path)
-
-    # Map columns: take first two as X, Y; ignore others (for now)
-    if d.shape[1] < 2:
-        return {'status': 'error', 'message': f'need >= 2 columns, got {d.shape[1]}'}
-    x = d[:, 0]
-    y = d[:, 1]
-    y2 = d[:, 2] if d.shape[1] >= 3 and tpl['default_plot_kind'] == 'dual_y' else None
-
-    # Auto range
-    if xrange is None:
-        xrange = (float(np.nanmin(x)), float(np.nanmax(x)))
-    if yrange is None:
-        yrange = (float(np.nanmin(y)), float(np.nanmax(y)))
-
-    # Auto increment
-    if xinc is None:
-        xinc = (xrange[1] - xrange[0]) / 5
-    if yinc is None:
-        yinc = (yrange[1] - yrange[0]) / 5
-
-    # Titles
-    if xtitle is None:
-        xtitle = tpl['default_axis_titles'].get('x', longs[0] if longs else 'X')
-    if ytitle is None:
-        ytitle = tpl['default_axis_titles'].get('y', longs[1] if len(longs) > 1 else 'Y')
-    if gtitle is None:
-        gtitle = f"{tpl['description']} ({os.path.basename(data_path)})"
-
-    # Build in Origin
-    op.set_show(False)
-    # op.save() persists the WHOLE project, so to write a clean OPJU
-    # we temporarily clear the project. To avoid losing the user's
-    # current work, save the current project path first and reopen it
-    # after we're done.
-    try:
-        original_project = op.path('p')  # current project path
-    except Exception:
-        original_project = ''
-    # op.new() creates a fresh empty project, so op.save() will only
-    # persist our render output (not the leftover demo files from
-    # previous MCP calls).
-    op.new()
-    wkbk = op.new_book('w', 'render')
-    wkbk.lname = 'render'  # originpro 1.1.15 quirk: force-set lname
-    sht = wkbk[0]
-    sht.from_list(0, x.tolist(), longs[0] if longs else 'x', units[0] if units else '')
-    sht.from_list(1, y.tolist(), longs[1] if len(longs) > 1 else 'y', units[1] if len(units) > 1 else '')
-
-    template = tpl['default_plot_kind']
-    if template in ('line', 'line+fit', 'line_error', 'step', 'paired_line', 'ridgeline'):
-        graph_template = 'line'
-    elif template == 'scatter':
-        graph_template = 'scatter'
-    elif template in ('bar', 'stacked_bar', 'percent_stacked_bar', 'grouped_bar', 'horizontal_bar'):
-        graph_template = 'bar'
-    elif template == 'box':
-        graph_template = 'box'
-    elif template in ('dual_y',):
-        graph_template = 'line'
-    else:
-        graph_template = 'scatter'
-
-    gp = op.new_graph(template=graph_template)
-    gl = gp[0]
-    # coly=col 1, colx=col 0
-    gl.add_plot(sht, 1, 0, type='l' if graph_template == 'line' else 's')
-
-    plot_styles = [{'symbol': 'circle' if graph_template == 'scatter' else 'none',
-                    'symbol_size': 4,
-                    'line_width': 0 if graph_template == 'scatter' else 1.5}]
-    legend_text = longs[1] if len(longs) > 1 else 'y'
-
-    cn(gp, xtitle=xtitle, ytitle=ytitle, gtitle=gtitle,
-       xrange=xrange, yrange=yrange,
-       xinc=xinc, yinc=yinc,
-       plot_styles=plot_styles,
-       legend_text=legend_text,
-       legend_pos='br',
-       font_size=20)
-
-    # Output paths
-    os.makedirs(output_dir, exist_ok=True)
-    png_path = os.path.join(output_dir, f"{name}.png")
-    opju_path = os.path.join(output_dir, f"{name}.opju")
-    gp.save_fig(png_path)
-
-    # Save OPJU too (editable). op.save(path) saves the entire project.
-    opju_error = None
-    try:
-        op.save(opju_path)
-        if not os.path.exists(opju_path):
-            opju_path = None
-    except Exception as e:
-        opju_error = str(e)
-        opju_path = None
-
-    # Optional fit
-    fit_result = None
-    if do_fit and tpl['suggested_fit']:
-        try:
-            from .fit import fit_preset
-            fit_result = fit_preset(tpl['suggested_fit'], sht, 0, 1)
-        except Exception as e:
-            fit_result = {'error': str(e)}
-
-    # Restore user's original project so we don't blow away their work.
-    if original_project and os.path.exists(original_project):
-        try:
-            op.open(original_project)
-        except Exception:
-            pass
-    else:
-        # No previous project; op.new() already left a clean slate.
-        pass
-
-    return {
-        'status': 'ok',
-        'template': name,
-        'output_paths': {
-            'png': png_path,
-            'opju': opju_path,
-        },
-        'axes': {'x': xtitle, 'y': ytitle, 'xrange': xrange, 'yrange': yrange},
-        'fit': fit_result,
-    }
-
-
-# Make available at import time
-if __name__ == '__main__':
-    print(f'Origin Bridge has {len(TEMPLATES)} templates:')
-    by_cat = {}
-    for t in TEMPLATES:
-        by_cat.setdefault(t['category'], []).append(t['name'])
-    for cat, names in sorted(by_cat.items()):
-        print(f'\n  [{cat}]')
-        for n in names:
-            print(f'    - {n}')

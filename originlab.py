@@ -103,6 +103,31 @@ def _worker():
         box["done"].set()
 
 
+def _dismiss_all_busy_dialogs():
+    """Click the busy box on every Origin instance; returns dismissed titles."""
+    titles = []
+    rows = _process_rows()
+    for row in rows or []:
+        titles.extend(_dismiss_busy_dialogs(row["pid"]))
+    return titles
+
+
+def _dismiss_own_busy_dialogs():
+    """Post-call opportunistic sweep over the instances WE spawned.
+
+    Only EnumWindows on known pids (~1ms): _process_rows' powershell probe is
+    far too heavy to run per call. Attached instances the user spawned keep the
+    instances/reclaim/timeout paths for coverage.
+    """
+    dismissed = []
+    try:
+        for pid in list(_started_pids):
+            dismissed.extend(_dismiss_busy_dialogs(pid))
+    except Exception:
+        pass
+    return dismissed
+
+
 def call(fn, *args, timeout=240, **kwargs):
     global _thread, _suspect
     with _thread_lock:
@@ -119,12 +144,27 @@ def call(fn, *args, timeout=240, **kwargs):
         box = {"done": threading.Event()}
         _q.put((fn, args, kwargs, box))
         if not box["done"].wait(timeout):
-            raise OriginError(
-                "com_timeout",
-                "Origin 在 %d 秒内没有响应" % timeout,
-                ["看 Origin 窗口是否卡在对话框或许可证弹窗", "任务管理器结束 Origin64.exe 后重试"],
-            )
+            # The likeliest non-crash block is the "正由另一个程序控制" message box:
+            # someone asked Origin to close while a client holds COM. It is our hold
+            # as often as not, so click the box and give the queued call a grace
+            # window instead of timing out with advice the model cannot act on.
+            dismissed = _dismiss_all_busy_dialogs()
+            if dismissed and box["done"].wait(15):
+                pass
+            else:
+                raise OriginError(
+                    "com_timeout",
+                    "Origin 在 %d 秒内没有响应%s" % (
+                        timeout,
+                        "（挡着一个「%s」的对话框，已替你点掉，重试仍超时说明还有别的弹窗）"
+                        % dismissed[0] if dismissed else ""),
+                    ["看 Origin 窗口是否卡在其他对话框或许可证弹窗（origin_instances 会逐个报告）",
+                     "任务管理器结束 Origin64.exe 后重试"],
+                )
         if "error" not in box:
+            # A close attempt during the call leaves the busy box on screen even
+            # after the call succeeds — clear it before handing the result back.
+            _dismiss_own_busy_dialogs()
             return box["value"]
         exc = box["error"]
         # Once per call: Origin's cached COM pointer can go stale when the process
@@ -256,6 +296,89 @@ def _terminate(pid, force=False):
     return subprocess.run(args, capture_output=True, text=True, timeout=30)
 
 
+# The "Origin 正由另一个程序控制 / is being controlled by another program"
+# message box: a client holds COM while something asks Origin to close. The box
+# is system-modal for that process and every COM call queues behind it until
+# someone clicks 确定 — which is our fault when the "another program" is us, so
+# we click it ourselves. Text-matched on purpose: a save prompt or a license
+# dialog gets REPORTED (instances) but never clicked, because guessing wrong
+# there loses work.
+_BUSY_DIALOG_TEXT = ("另一个程序控制", "controlled by another program")
+_DIALOG_CLASS = "#32770"
+_BTN_CLICK = 0x00F5
+
+
+def _window_text(hwnd):
+    import ctypes
+    buf = ctypes.create_unicode_buffer(512)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512)
+    return buf.value
+
+
+def _dialog_body(hwnd):
+    """A MessageBox keeps its message in a child Static control — the window
+    title is just 'OriginPro 2024'. Concatenate title + child texts."""
+    import ctypes
+    texts = [_window_text(hwnd)]
+    FindWindowExW = ctypes.windll.user32.FindWindowExW
+    child = FindWindowExW(hwnd, None, None, None)
+    while child:
+        cls = ctypes.create_unicode_buffer(64)
+        ctypes.windll.user32.GetClassNameW(child, cls, 64)
+        if cls.value == "Static":
+            texts.append(_window_text(child))
+        child = FindWindowExW(hwnd, child, None, None)
+    return "\n".join(t for t in texts if t)
+
+
+def _busy_dialogs(pid):
+    """Visible dialog windows of `pid` whose text matches the busy message."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    import ctypes.wintypes as wt
+    found = []
+    EnumWindows = ctypes.windll.user32.EnumWindows
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+    GetClassName = ctypes.windll.user32.GetClassNameW
+    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
+    GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
+
+    @WNDENUMPROC
+    def on_window(hwnd, _lparam):
+        buf = ctypes.create_unicode_buffer(256)
+        GetClassName(hwnd, buf, 256)
+        if buf.value != _DIALOG_CLASS or not IsWindowVisible(hwnd):
+            return True
+        owner_pid = wt.DWORD()
+        GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+        if owner_pid.value != pid:
+            return True
+        body = _dialog_body(hwnd)
+        if any(t in body for t in _BUSY_DIALOG_TEXT):
+            found.append({"hwnd": hwnd, "title": _window_text(hwnd), "body": body})
+        return True
+
+    EnumWindows(on_window, 0)
+    return found
+
+
+def _dismiss_busy_dialogs(pid):
+    """Click 确定 on the busy dialog. Returns the matched texts dismissed."""
+    import ctypes
+    dismissed = []
+    for box in _busy_dialogs(pid):
+        # The default button (确定/OK) receives BM_CLICK without needing its hwnd:
+        # PostMessage to the box itself with an IDC override is unreliable across
+        # localizations, so find the button child and click that.
+        hwnd = box["hwnd"]
+        btn = ctypes.windll.user32.FindWindowExW(hwnd, None, "Button", None)
+        target = btn if btn else hwnd
+        ctypes.windll.user32.PostMessageW(target, _BTN_CLICK, 0, 0)
+        dismissed.append(box["body"].replace("\n", " ")[:80])
+    return dismissed
+
+
 def _close_pid(pid):
     """Ask for a polite exit first; escalate to a forced kill only if it survives."""
     _terminate(pid)
@@ -283,6 +406,7 @@ def instances():
     for row in rows:
         row["foreground"] = bool(row["window"])
         row["ours"] = row["pid"] in _started_pids
+        row["busy_dialogs"] = [b["body"].replace("\n", " ")[:60] for b in _busy_dialogs(row["pid"])]
     return sanitize({"count": len(rows), "probe": "ok",
                      "background": [r for r in rows if not r["foreground"]],
                      "foreground": [r for r in rows if r["foreground"]],
@@ -304,7 +428,16 @@ def reclaim(close_background=True):
     back = [r for r in rows if not r["window"]]
     front = [r for r in rows if r["window"]]
     result = {"probe": "ok", "closed": [], "force_closed": [],
-              "left_running": [r["pid"] for r in front], "notify": ""}
+              "left_running": [r["pid"] for r in front], "notify": "",
+              "dismissed_dialogs": []}
+    # A foreground instance with the busy box up is stuck BECAUSE a client holds
+    # COM (ours as often as not): click the box even though the instance itself
+    # stays hands-off. Any other dialog is never touched.
+    for row in rows:
+        for title in _dismiss_busy_dialogs(row["pid"]):
+            result["dismissed_dialogs"].append({"pid": row["pid"], "title": title})
+    if result["dismissed_dialogs"]:
+        result["notify"] += "替你点掉了 %d 个「另一个程序控制」弹窗；" % len(result["dismissed_dialogs"])
     if not close_background:
         result["skipped"] = [r["pid"] for r in back]
         return sanitize(result)
@@ -1830,6 +1963,9 @@ def inspect(graph=""):
 def exit_origin(save_to=""):
     def run():
         global _op, _project_file
+        # op.exit() is itself a COM call: with the busy box up it queues behind
+        # the dialog and times out. Clear the box before touching COM.
+        dismissed = _dismiss_all_busy_dialogs()
         op = origin()
         saved = _save_project(save_to)["path"] if save_to else ""
         _safe(op.exit)
@@ -1838,7 +1974,8 @@ def exit_origin(save_to=""):
         _project_file = ""
         _reset_connection()
         _reset_growth()
-        return sanitize({"exited": True, "saved": saved})
+        return sanitize({"exited": True, "saved": saved,
+                         **({"dismissed_dialogs": dismissed} if dismissed else {})})
 
     return call(run)
 

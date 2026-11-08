@@ -170,6 +170,7 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 - No concurrent-session protection: two chat sessions driving one Origin will stomp each other.
 - Long sessions accumulate pages; past ~200 the per-plot cost grows (0.7 s → 2.8 s at 300 pages). The engine warns every 50 new pages and `origin_close_pages` / `origin_exit` reset the counter.
 - A windowless Origin is the *normal* state for a dsh-driven instance, so nothing ever kills instances implicitly: `origin_reclaim` acts only on windowless ones, and only when you call it.
+- A close attempt while Origin is under automation pops the modal "being controlled by another program" box, and every COM call queues behind it until someone clicks OK. The bridge matches that box **by body text** — dismissed automatically on the timeout path (with a grace window), swept after each call for instances it spawned, reported per-instance by `origin_instances`, and cleared before `origin_reclaim`/`origin_exit` act. Every other dialog (save prompts, license) is reported but never clicked.
 - Statistics (t-test / ANOVA / PCA / survival) are not provided — `originpro` doesn't offer them either.
 
 ## Troubleshooting
@@ -180,7 +181,7 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 | `connection_error` | Origin ≥ 2021? `pip show originpro`? Exactly one `Origin64.exe` in Task Manager? |
 | "Instance limit exceeded" | `origin_instances` to see them, `origin_reclaim` to close windowless leftovers; windows with titles may be your own unsaved work |
 | `import_empty` | `origin_read_file` first; space-aligned and multi-header files are handled, so this means the file truly has no numeric rows |
-| `com_timeout` | Origin stuck on a modal dialog / license popup |
+| `com_timeout` | Origin stuck on some other dialog / license popup; the "being controlled by another program" box is dismissed by the bridge itself, plus a 15 s grace window |
 | Image missing | `origin_inspect` → `plots` count; Chinese/space/long paths are verified, no need to ASCII-fy |
 | `bad_path` / `target_locked` | The path is wrong (directory as filename, unmapped drive) or the target exists read-only; the bridge will not overwrite |
 | Install fails `ERR_PNPM_NO_MATCHING_VERSION` | Mirror lag: add `--registry=https://registry.npmjs.org/` once, or use a `file:` offline bundle |

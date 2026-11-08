@@ -240,6 +240,40 @@ check("非新建不计数", originlab._growth_warning(created=False) is None
 originlab._reset_growth()
 
 print()
+print("busy-dialog finder（真窗口，不碰 COM）:")
+if os.name == "nt":
+    import subprocess as _sp
+    import time as _time
+    # A real #32770 message box owned by another process, carrying the same text
+    # Origin uses for "另一个程序控制". MessageBox blocks the child until clicked,
+    # so the child self-closes after 30 s as a safety net.
+    child = (
+        "import ctypes, sys, threading\n"
+        "t = threading.Timer(30.0, lambda: ctypes.windll.user32.PostMessageW(None, 0x0010, 0, 0))\n"
+        "t.daemon = True; t.start()\n"
+        "ctypes.windll.user32.MessageBoxW(None, u'Origin 正由另一个程序控制，目前无法关闭', u'OriginPro 2024', 0x30)\n"
+    )
+    box = _sp.Popen([sys.executable, "-c", child])
+    try:
+        found = []
+        for _ in range(40):           # up to 10 s for the window to appear
+            _time.sleep(0.25)
+            found = originlab._busy_dialogs(box.pid)
+            if found:
+                break
+        check("找到忙对话框（正文在子 Static 里）",
+              bool(found) and "另一个程序控制" in found[0]["body"], found)
+        check("不误报无对话框进程", originlab._busy_dialogs(box.pid + 999999) == [])
+        dismissed = originlab._dismiss_busy_dialogs(box.pid)
+        _time.sleep(0.6)
+        check("点掉后枚举不到", originlab._busy_dialogs(box.pid) == [], dismissed)
+        check("点掉返回了正文", bool(dismissed) and "另一个程序控制" in dismissed[0], dismissed)
+    finally:
+        box.terminate()
+else:
+    print("  skip  非 Windows")
+
+print()
 if fails:
     print("%d 项失败: %s" % (len(fails), ", ".join(fails)))
     raise SystemExit(1)

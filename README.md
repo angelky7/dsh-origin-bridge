@@ -284,6 +284,7 @@ Origin Bridge 的做法：
 | dsh 新 profile 的补丁模板 | `cordis.patch.yml` 模板内容就是一行 `[]`（顶层数组占位）。往它后面**追加** `- insert:` 会得到两个 YAML 文档，dsh 直接 `failed to parse overlay` 起不来——`install_dsh.ps1` 2026-10-20 前正是这样，全新环境按 README 用脚本装会把配置写坏 | 安装器现在把"只有注释/只有一个 `[]`"的文件当空文件处理，插块成为数组本身；装完会用 PyYAML 校验一次，解析失败就提示从备份恢复 |
 | `save_fig` 的 `width` | 传了也不生效：`save_fig(path)` 只有 path 时用页面尺寸，**必须同时给 type** 才认 width （实测 400 和 12000 导出都是 3216×2461、字节数相同）。我们的 `origin_export` 以前恰好只传 path | `save_fig(path, fmt, width=N)` + 缺文件时回退纯 path；PNG 导完比对 `dimensions.0` 与请求值，不一致就回 warning。题库宽度用例从"有 dimensions"改成**断言等于请求宽度** |
 | 非标准 JSON | `json.dumps` 默认把 inf/nan 写成裸 `Infinity`/`NaN`，那不是合法 JSON——dsh 侧整条响应解析失败，看起来像"桥挂了"而不是"一个数不对" | `sanitize()` 把 ±inf/nan 归 None；`server.py` 写出走 `allow_nan=False`，兜不住就降级成带原 id 的 JSON-RPC 错误；`smoke_test` 客户端用 `strict_loads` 拒绝，测试不会替产品掩盖它（`test_json_safety.py` 29 项，含幻觉工具名与未知方法的协议层断言） |
+| 关闭一个正被自动化的 Origin | Origin 拒绝并弹「正由另一个程序控制」的模态框；之后**所有** COM 调用在这个框后面排队，直到有人点确定——桥的表现就是连串 `com_timeout`（2026-11-08 实测复现：拟合进行中发 WM_CLOSE，弹出的框与用户截图逐字一致） | 桥按**正文文本**匹配这个框：超时路径先点掉再给 15 秒宽限，每次调用完成后顺手清一遍自己起的实例；`origin_instances` 会逐个报告弹窗，`origin_reclaim`/`origin_exit` 动手前先清障。其他对话框（保存提示、许可证）只报告、绝不代点——点错会丢工作 |
 
 ## 已知边界
 
@@ -308,7 +309,7 @@ Origin Bridge 的做法：
 | `connection_error` | Origin 是否 ≥2021；`pip show originpro`；任务管理器里 `Origin64.exe` 是否只有一个 |
 | 报"实例超过上限" | `origin_instances` 看有几个、哪些没窗口；`origin_reclaim` 关残留的后台实例；有窗口的那些要用户自己关（可能有未保存的东西） |
 | `import_empty` | 先 `origin_read_file` 看结构；空格/多行表头已由自研解析器处理，走到这个报错说明文件本身没有数值行 |
-| `com_timeout` | Origin 窗口是否卡在对话框/许可证弹窗 |
+| `com_timeout` | Origin 窗口是否卡在其他对话框或许可证弹窗；「正由另一个程序控制」的框桥会替你点掉并多给 15 秒宽限 |
 | `无效指针` | 页面攒太多：`origin_close_pages`，或 `origin_exit` 让它重开 |
 | 图片没出来 | `origin_inspect` 看 `plots` 是否为 0；中文/空格/长路径实测可用，不用刻意改 ASCII |
 | 图是空的但没报错 | 看返回里的 `proof_level`；`plot_axis_degenerate` 会主动抛出 |

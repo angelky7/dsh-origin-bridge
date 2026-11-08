@@ -35,6 +35,13 @@ def measure(suite):
                           capture_output=True, text=True, encoding="utf-8",
                           errors="replace", timeout=600, cwd=HERE)
     if proc.returncode != 0:
+        # CI runs the same suites twice (steps first, here again); a state leak
+        # between them shows up as an exit-1 with no visible output unless the
+        # child's tail is surfaced.
+        print("%-18s FAILED (exit %d)" % (suite, proc.returncode))
+        tail = (proc.stdout or "") + (proc.stderr or "")
+        for line in tail.strip().splitlines()[-12:]:
+            print("    | " + line[:160])
         problems.append("%s 本身没跑过（exit %d）" % (suite, proc.returncode))
         return None
     return len(CHECK_RE.findall(proc.stdout))

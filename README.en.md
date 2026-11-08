@@ -32,7 +32,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **1000+ real tests, not a claim.** 1136 full-chain cases run against a real stdio server + local OriginPro — 1136 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 163, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **409** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 42, smoke 129, edge 30, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1136-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
+- **1000+ real tests, not a claim.** 1136 full-chain cases run against a real stdio server + local OriginPro — 1136 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 163, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **413** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 46, smoke 129, edge 30, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1136-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
 
 ## What it can do
 
@@ -115,7 +115,7 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 .\.venv\Scripts\python.exe edge_checks.py             # 30 checks, needs Origin
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 checks, Origin-free
 .\.venv\Scripts\python.exe test_binio.py              # 15 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
-.\.venv\Scripts\python.exe test_lifecycle.py          # 42 checks, Origin-free
+.\.venv\Scripts\python.exe test_lifecycle.py          # 46 checks, Origin-free
 .\.venv\Scripts\python.exe test_paths.py              # 35 checks, Origin-free
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free

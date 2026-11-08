@@ -19,6 +19,21 @@ async def main():
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    failed = []
+
+    def is_error(res):
+        # The SDK renamed CallToolResult.isError to is_error somewhere in 1.x;
+        # accept either so this works on old and new installs.
+        return bool(getattr(res, "is_error", None) or getattr(res, "isError", False))
+
+    def payload_of(res):
+        # An error reply can carry empty content; json.loads("") would crash
+        # with a message that hides the actual failure.
+        text = "".join(c.text for c in res.content if c.type == "text")
+        if not text.strip():
+            return {"ok": False, "message": "<empty content> isError=%s" % is_error(res)}
+        return json.loads(text)
+
     params = StdioServerParameters(
         command=sys.executable,
         args=["-u", os.path.join(HERE, "server.py")],
@@ -37,9 +52,11 @@ async def main():
                 print("   %-20s %s" % (t.name, t.description.split("。")[0][:60]))
 
             res = await session.call_tool("origin_status", {})
-            text = "".join(c.text for c in res.content if c.type == "text")
-            payload = json.loads(text)
-            print("status call :", "connected" if payload.get("connected") else payload)
+            payload = payload_of(res)
+            ok = payload.get("connected") is True and not is_error(res)
+            print("status call :", "connected" if ok else payload)
+            if not ok:
+                failed.append("status")
 
             if "--figure" in sys.argv:
                 out = os.path.join(HERE, "out")
@@ -49,12 +66,17 @@ async def main():
                     "x_title": "Time (s)", "y_title": "Signal (mV)",
                     "output_dir": out, "width": 1400,
                 })
-                payload = json.loads("".join(c.text for c in res.content if c.type == "text"))
-                if not payload.get("ok"):
+                payload = payload_of(res)
+                if is_error(res) or not payload.get("ok"):
                     print("figure FAILED:", json.dumps(payload, ensure_ascii=False)[:900])
+                    failed.append("figure")
                 else:
                     print("figure      :", payload.get("ok"), payload.get("delivered"),
                           payload.get("duration_ms"), "ms")
+
+    # A compatibility check that exits 0 on failure is useless in scripts.
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -509,12 +509,23 @@ def _pid_alive(pid):
         except OSError:
             return False
     import ctypes
+    import ctypes.wintypes as wt
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    STILL_ACTIVE = 259
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
         return False
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return True
+    # A TerminateProcess'd pid whose handles are still open (a test harness
+    # holding the Popen) is a zombie: OpenProcess succeeds, so the exit code
+    # decides liveness, not the handle.
+    try:
+        code = wt.DWORD()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == STILL_ACTIVE
+    finally:
+        k32.CloseHandle(handle)
 
 
 def _session_lock_read():

@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>1135 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>27 个工具 · <b>1136 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1135%2F1135%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1136%2F1136%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -332,9 +332,10 @@ dsh-origin-bridge/
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
 └── test_*.py / smoke_test.py / edge_checks.py   # 409 项离线与单元检查（随包发布）
+    （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 
-开发侧另有 `cases/` + `run_cases.py` 的 1135 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。
+开发侧另有 `cases/` + `run_cases.py` 的 1136 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）；题库每跑完一次会自动核对本文的全部数字（`verify_readme_claims`），对不上就以实测为准。
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。
 

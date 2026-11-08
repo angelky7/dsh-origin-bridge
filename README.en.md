@@ -120,6 +120,7 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free
 .\.venv\Scripts\python.exe test_labtalk_guard.py      # 33 checks, Origin-free
+.\.venv\Scripts\python.exe check_claims.py            # re-measures the suites and holds the README counts to them (CI runs it too)
 ```
 
 For dsh registration from a source checkout, run `install_dsh.ps1` (backs up your profile patch, writes the insert block, validates the YAML afterwards) — see the [Chinese README](README.md) for the manual YAML and the three things that must be exactly right.

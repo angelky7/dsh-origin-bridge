@@ -40,6 +40,8 @@ jobs:
           python test_labtalk_guard.py
       - name: lifecycle classification (no Origin needed)
         run: python test_lifecycle.py
+      - name: README coverage claims match the measured suites
+        run: python check_claims.py
       - name: server advertises all 27 tools
         run: |
           $n = (python server.py --tools | Measure-Object -Line).Lines

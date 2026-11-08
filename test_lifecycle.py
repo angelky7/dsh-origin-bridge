@@ -240,6 +240,50 @@ check("非新建不计数", originlab._growth_warning(created=False) is None
 originlab._reset_growth()
 
 print()
+print("cross-session lock（不碰 COM，用临时锁路径）:")
+import json as _json
+import subprocess as _sp
+import tempfile as _tempfile
+
+_real_lock = originlab._SESSION_LOCK
+_lockdir = _tempfile.mkdtemp(prefix="origin_bridge_locktest_")
+originlab._SESSION_LOCK = os.path.join(_lockdir, "session.lock")
+try:
+    holder = originlab._session_lock_acquire()
+    check("首次获取成功", holder is None, holder)
+    check("锁文件写着本进程 pid", _json.loads(open(originlab._SESSION_LOCK).read())["bridge_pid"] == os.getpid())
+
+    child = (
+        "import os, sys, json\n"
+        "sys.path.insert(0, os.environ['BRIDGE_DIR'])\n"
+        "import originlab\n"
+        "originlab._SESSION_LOCK = os.environ['LOCK_PATH']\n"
+        "print(json.dumps(originlab._session_lock_acquire()))\n"
+    )
+    env = dict(os.environ, BRIDGE_DIR=os.path.dirname(os.path.abspath(__file__)),
+               LOCK_PATH=originlab._SESSION_LOCK)
+    proc = _sp.run([sys.executable, "-c", child], capture_output=True, text=True,
+                   encoding="utf-8", env=env, timeout=60)
+    got = _json.loads(proc.stdout.strip().splitlines()[-1]) if proc.returncode == 0 else {}
+    check("另一个活进程被拒绝并拿到本进程 pid",
+          isinstance(got, dict) and got.get("bridge_pid") == os.getpid(), (proc.returncode, got))
+
+    originlab._session_lock_release()
+    check("释放后锁文件消失", not os.path.exists(originlab._SESSION_LOCK))
+
+    dead = {"bridge_pid": 999999999, "started_at": "2000-01-01T00:00:00"}
+    with open(originlab._SESSION_LOCK, "w", encoding="utf-8") as fh:
+        _json.dump(dead, fh)
+    holder = originlab._session_lock_acquire()
+    check("死进程的旧锁被接管", holder is None, holder)
+    originlab._session_lock_release()
+finally:
+    originlab._SESSION_LOCK = _real_lock
+    import shutil as _shutil
+    _shutil.rmtree(_lockdir, ignore_errors=True)
+
+print()
+print()
 print("busy-dialog finder（真窗口，不碰 COM）:")
 if os.name == "nt":
     import subprocess as _sp

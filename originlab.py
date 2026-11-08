@@ -10,6 +10,7 @@ forth is the most common source of silent failures.
 """
 
 import atexit
+import json
 import math
 import os
 import queue
@@ -228,6 +229,14 @@ def origin():
     except ImportError as exc:
         raise OriginError("missing_originpro", "这个 Python 环境里没有 originpro：%s" % exc,
                           ["pip install originpro"])
+    holder = _session_lock_acquire()
+    if holder:
+        raise OriginError(
+            "origin_busy",
+            "另一个桥会话正在驱动 Origin（bridge_pid=%s，从 %s 起）——两个会话同时驱动会互相踩页面和句柄"
+            % (holder["bridge_pid"], holder["started_at"]),
+            ["等那个会话用完（它的桥进程退出或调用 origin_exit 会自动释放）",
+             "确定那边已结束后重试；卡死了就删掉锁文件 %s 再重试" % _SESSION_LOCK])
     # Record who was already running: anything that appears after we connect was
     # started by us, and anything windowless that predates us is an orphan left by
     # a client that exited without releasing its Origin.
@@ -464,6 +473,7 @@ def reclaim(close_background=True):
 
 def _release_on_exit():
     """A client that exits must not leave its own Origin instance running."""
+    _session_lock_release()
     if not _started_pids:
         return
     try:
@@ -475,6 +485,84 @@ def _release_on_exit():
                 _close_pid(row["pid"])
     except Exception:
         pass
+
+
+# ------------------------------------------------- cross-session Origin lock
+# "无并发保护：两个会话同时驱动 Origin 会互相踩" was a documented limit since
+# the first release: two bridge processes attach to one Origin and their calls
+# interleave (shared pages, one session's close_pages evicting the other's
+# handles). The busy-modal fix made the symptom rarer, not impossible. A lock
+# file turns the silent stomp into a named origin_busy error naming the other
+# bridge's pid. Advisory by nature — a user can always delete the file.
+
+_SESSION_LOCK = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                             "origin-bridge", "session.lock")
+
+
+def _pid_alive(pid):
+    if not pid or pid == os.getpid():
+        return pid == os.getpid() and bool(pid)
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return False
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return True
+
+
+def _session_lock_read():
+    try:
+        with open(_SESSION_LOCK, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _session_lock_acquire():
+    """Claim exclusive driving rights. Returns the OTHER live bridge's info on
+    conflict, else None (fresh claim or stolen stale lock)."""
+    info = {"bridge_pid": os.getpid(),
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        os.makedirs(os.path.dirname(_SESSION_LOCK), exist_ok=True)
+        # O_EXCL creation is the real mutual exclusion; FileExistsError means
+        # someone holds it and we go validate whether they are still alive.
+        with open(_SESSION_LOCK, "x", encoding="utf-8") as fh:
+            json.dump(info, fh)
+        return None
+    except FileExistsError:
+        held = _session_lock_read() or {}
+        other = held.get("bridge_pid")
+        if other == os.getpid():
+            return None                      # our own lock from an earlier connect
+        if _pid_alive(other):
+            return {"bridge_pid": other,
+                    "started_at": held.get("started_at", "?")}
+        # dead owner: steal
+        try:
+            with open(_SESSION_LOCK, "w", encoding="utf-8") as fh:
+                json.dump(info, fh)
+        except OSError:
+            pass
+        return None
+    except OSError:
+        return None                          # cannot write the lock: degrade open
+
+
+def _session_lock_release():
+    held = _session_lock_read()
+    if held and held.get("bridge_pid") == os.getpid():
+        try:
+            os.remove(_SESSION_LOCK)
+        except OSError:
+            pass
 
 
 atexit.register(_release_on_exit)
@@ -1974,6 +2062,7 @@ def exit_origin(save_to=""):
         _project_file = ""
         _reset_connection()
         _reset_growth()
+        _session_lock_release()   # free the slot while this process stays alive
         return sanitize({"exited": True, "saved": saved,
                          **({"dismissed_dialogs": dismissed} if dismissed else {})})
 

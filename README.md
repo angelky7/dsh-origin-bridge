@@ -40,7 +40,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1136 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1136 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **413 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 46、smoke 129、edge 30、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1136 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1136 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1136 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 163、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **418 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 51、smoke 129、edge 30、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1136 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -134,14 +134,14 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe edge_checks.py             # 30 项边界
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 15 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-.\.venv\Scripts\python.exe test_lifecycle.py          # 46 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
+.\.venv\Scripts\python.exe test_lifecycle.py          # 51 项，不需要 Origin：实例分类/回收/掉线重连/会话锁的安全边界
 .\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 项，不需要 Origin：返回值必须是严格 JSON
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 413 项随包发布，你可以自己复跑。另外那 **1136 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 418 项随包发布，你可以自己复跑。另外那 **1136 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -298,7 +298,7 @@ Origin Bridge 的做法：
 - 长会话攒太多页面会让 COM 桥报"无效指针"。`origin_close_pages` 能清，根治是 `origin_exit` 后重连。2026-10-20 实测到 300 页仍不崩，但每张图的耗时从 0.7 秒（前 100 页）涨到 2.8 秒（200–300 页）——所以 `origin_plot`/`origin_matrix` 每新建 50 个页面会在 `warnings` 里提醒一次（计数不花额外 COM 调用，`origin_close_pages`/`origin_exit`/`origin_open` 会清零）。
 - **Origin 实例不会跟着客户端退出**：originpro 需要时自己拉一个 Origin，Python 进程结束那个实例还在。攒够就会报"实例超过上限"。现在插件在进程退出时回收**自己起的、且没有窗口的**实例（`atexit`），历史残留用 `origin_reclaim` 清；有窗口的实例永远不动，因为那可能是你正开着的项目。
 - 统计批处理（t 检验 / ANOVA / PCA / 生存分析）没有，originpro 本身也不提供。
-- **无并发保护**：两个会话同时驱动 Origin 会互相踩。
+- **并发由锁守护**：两个会话同时驱动 Origin 会互相踩页面和句柄——现在第一个接入的桥持有 `%LOCALAPPDATA%\origin-bridge\session.lock`，后来的活桥会得到具名的 `origin_busy`（报出占用方 pid），持有方退出或 `origin_exit` 自动释放，死进程的旧锁自动接管。这是进程间的君子协定，锁文件本身可以删。
 - 40 个图表预设只取元数据；预设自带的 `render_template()` 会先 `op.new()`——那会把用户正在编辑的工程整个丢掉，所以这里换成自己的渲染路径。
 
 ## 排障
@@ -315,6 +315,7 @@ Origin Bridge 的做法：
 | 图是空的但没报错 | 看返回里的 `proof_level`；`plot_axis_degenerate` 会主动抛出 |
 | `bad_path` | 路径本身不行：把目录当文件名、盘符没映射、UNC 主机不可达、或路径里没有真正的文件名。换可写的绝对路径，别原样重试 |
 | `target_locked` | 目标文件已存在且不可写（只读属性或正被 Origin/图片查看器占用）。去掉只读或换名，桥不会覆盖它 |
+| `origin_busy` | 另一个桥会话正持有 Origin（锁在 `%LOCALAPPDATA%\origin-bridge\session.lock`）。等那边结束；确认卡死了就删锁文件重试 |
 | 导出报了 `export_failed` 但目录里有张图 | 看 `warnings`：文件名里的 `#` 会被 Origin 换成编号，桥认出后会改名回你要的名字；认出多个候选时不会猜，直接报错让你换名 |
 | `ERR_PNPM_NO_MATCHING_VERSION`（装不上） | 镜像滞后，不是没发布：`npm config get registry` 看一眼，加 `--registry=https://registry.npmjs.org/` 或改用 `file:` 离线包 |
 
@@ -332,7 +333,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 413 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 418 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 

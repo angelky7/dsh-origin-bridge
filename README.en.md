@@ -32,7 +32,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **1000+ real tests, not a claim.** 1136 full-chain cases run against a real stdio server + local OriginPro — 1136 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 163, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **413** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 46, smoke 129, edge 30, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1136-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
+- **1000+ real tests, not a claim.** 1136 full-chain cases run against a real stdio server + local OriginPro — 1136 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 163, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **418** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 51, smoke 129, edge 30, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1136-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
 
 ## What it can do
 
@@ -115,7 +115,7 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 .\.venv\Scripts\python.exe edge_checks.py             # 30 checks, needs Origin
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 checks, Origin-free
 .\.venv\Scripts\python.exe test_binio.py              # 15 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
-.\.venv\Scripts\python.exe test_lifecycle.py          # 46 checks, Origin-free
+.\.venv\Scripts\python.exe test_lifecycle.py          # 51 checks, Origin-free
 .\.venv\Scripts\python.exe test_paths.py              # 35 checks, Origin-free
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free
@@ -167,7 +167,7 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 - Nonlinear fitting needs an **OriginPro** license; the standard edition gets an explicit `fit_function_unavailable`.
 - `.bin` covers the `80 F2 1B 00` workstation format only; EIS .bin has the measured column only. Other vendors' binaries (Gamry / Autolab / Pine) are not attempted.
 - Network paths are refused (`bad_path`): no UNC, no unmapped drives. Local paths with Chinese names, spaces, 200+ characters, `tiff→tif` renaming and auto-created directories all verified on real hardware.
-- No concurrent-session protection: two chat sessions driving one Origin will stomp each other.
+- **Concurrency is guarded by a lock**: two sessions driving one Origin stomp each other's pages and handles. The first bridge to attach holds `%LOCALAPPDATA%\origin-bridge\session.lock`; a second live bridge gets a named `origin_busy` error naming the holder's pid. The lock is released on `origin_exit` or process exit, a dead owner's lock is stolen automatically, and deleting the file is always the manual override.
 - Long sessions accumulate pages; past ~200 the per-plot cost grows (0.7 s → 2.8 s at 300 pages). The engine warns every 50 new pages and `origin_close_pages` / `origin_exit` reset the counter.
 - A windowless Origin is the *normal* state for a dsh-driven instance, so nothing ever kills instances implicitly: `origin_reclaim` acts only on windowless ones, and only when you call it.
 - A close attempt while Origin is under automation pops the modal "being controlled by another program" box, and every COM call queues behind it until someone clicks OK. The bridge matches that box **by body text** — dismissed automatically on the timeout path (with a grace window), swept after each call for instances it spawned, reported per-instance by `origin_instances`, and cleared before `origin_reclaim`/`origin_exit` act. Every other dialog (save prompts, license) is reported but never clicked.
@@ -184,6 +184,7 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 | `com_timeout` | Origin stuck on some other dialog / license popup; the "being controlled by another program" box is dismissed by the bridge itself, plus a 15 s grace window |
 | Image missing | `origin_inspect` → `plots` count; Chinese/space/long paths are verified, no need to ASCII-fy |
 | `bad_path` / `target_locked` | The path is wrong (directory as filename, unmapped drive) or the target exists read-only; the bridge will not overwrite |
+| `origin_busy` | Another bridge session holds Origin (lock at `%LOCALAPPDATA%\origin-bridge\session.lock`). Wait for it, or delete the lock file if it is wedged |
 | Install fails `ERR_PNPM_NO_MATCHING_VERSION` | Mirror lag: add `--registry=https://registry.npmjs.org/` once, or use a `file:` offline bundle |
 
 The [Chinese README](README.md) also carries a maintainer table of **30+ measured originpro/Origin traps** (silent no-ops, the real `plotxy` codes, `set_formula`'s actual 0-based index, COM thread affinity, the missing-value sentinel, the export filter rewriting `#`…) — if you maintain anything that drives Origin from Python, read it.

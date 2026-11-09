@@ -25,6 +25,20 @@
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
 
+## What this code is for
+
+Not "the Origin MCP with the most tools" — the one you can trust on real lab data. Every trade-off serves these five goals:
+
+1. **Finish the whole chain.** Import → analyse → plot → style → export → an editable project, each step proven on real workstation files, not just synthetic samples.
+2. **Never report success it cannot prove.** A write either reads evidence back or fails/degrades honestly; `unknown` stays `unknown`. "The request was sent" is never treated as "the thing was done".
+3. **Fail closed on lifecycle.** Session lock, instance ownership, exit, timeouts: when in doubt, refuse or report — never guess, never silently replay a write, never kill an instance whose ownership is unproven.
+4. **Never touch what is the user's.** A windowed Origin is never killed; read-only files are never overwritten; test data and prompts are never uploaded or shipped.
+5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and 473 offline/edge checks ship inside the package for anyone to re-run.
+
+**Explicit non-goals:** a tool-count race, cloud rendering, rewriting Origin itself. A single COM worker is a deliberate choice — no multi-worker complexity unless measurement proves COM cannot be isolated.
+
+**Known edges in 0.4.17:** an in-flight COM call cannot be cancelled by MCP (queued ones can), and COM reference release has behavioural evidence only, not a destructor-thread proof. Both are listed under "Known limits" in the release notes, not counted as done.
+
 ## Why
 
 Existing attempts at wiring Origin into chat either upload your data to a cloud or are 200-line toys. Origin Bridge is the opposite:

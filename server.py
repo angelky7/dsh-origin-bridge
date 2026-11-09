@@ -291,12 +291,14 @@ TOOLS = [
     },
     {
         "name": "origin_reclaim",
-        "description": "回收残留的 Origin 实例：只关**没有窗口**的后台实例；有窗口的一律不动，只在返回里告诉你哪几个需要用户自己关。close_background=false 时只看不动手。",
+        "description": "回收残留的 Origin 实例：默认只关**本桥启动过**且没有窗口的实例（本会话记录或上次运行留下的 pid+启动时间记录）；有窗口的一律不动。归属不明的无窗口实例只在 unowned 里报告，不关——确认那确实是本桥的残留后用 include_orphans=true。close_background=false 时只看不动手。强杀后会核实进程确实退出，没退会报 stuck。",
         "inputSchema": {
             "type": "object",
-            "properties": {"close_background": {"type": "boolean", "default": True}},
+            "properties": {"close_background": {"type": "boolean", "default": True},
+                           "include_orphans": {"type": "boolean", "default": False}},
         },
-        "run": lambda a: originlab.reclaim(bool(a.get("close_background", True))),
+        "run": lambda a: originlab.reclaim_safe(bool(a.get("close_background", True)),
+                                                bool(a.get("include_orphans", False))),
     },
     {
         "name": "origin_annotate",
@@ -553,6 +555,11 @@ def _handle(msg):
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}}}
 
     if method in ("notifications/initialized", "notifications/cancelled"):
+        # This stdio loop is synchronous: a tools/call blocks this thread, so a
+        # cancellation arriving while a tool runs is only read after the answer.
+        # What CAN be cancelled lives in originlab.call: a queued task is skipped
+        # when its call times out, and an in-flight timeout is reported as
+        # executed="unknown" instead of being replayed.
         return None
 
     if method == "ping":

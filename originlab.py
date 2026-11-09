@@ -1,8 +1,9 @@
 """Origin automation engine.
 
-Every COM call is marshalled onto one dedicated worker thread: comtypes/COM is
-thread-affine, and driving Origin from the stdio reader thread is what makes
-other bridges hang.
+Every COM call is marshalled onto one dedicated worker thread: COM automation
+is thread-affine, and driving Origin from the stdio reader thread is what makes
+other bridges hang. (originpro 1.1.15 on Windows binds to OriginExt/SWIG, not
+comtypes — the old comment said otherwise; the thread-affinity rule still holds.)
 
 Object references handed to the model are opaque handles ("ws-1", "gr-2") backed
 by a registry, because parsing Origin's own [Book]Sheet! range strings back and
@@ -92,15 +93,37 @@ _thread = None
 _thread_lock = threading.Lock()
 _op = None
 _suspect = False
+_inflight = [None]    # box currently executing on the worker
+_abandoned = [None]   # a timed-out box that may still be running
+_thread_trace = {"attach": [], "reset": []}
+
+
+def _trace_thread(kind):
+    """Remember which threads attach/detach, for the thread-affinity experiment."""
+    trace = _thread_trace[kind]
+    trace.append(threading.get_ident())
+    del trace[:-8]
 
 
 def _worker():
     while True:
         fn, args, kwargs, box = _q.get()
+        # A queued call whose caller already timed out must not run later as if
+        # nothing happened: timeouts end the WAIT, not the work.
+        if box.get("cancel") is not None and box["cancel"].is_set():
+            box["cancelled"] = True
+            box["done"].set()
+            continue
+        _inflight[0] = box
+        box["started"] = True
         try:
             box["value"] = fn(*args, **kwargs)
         except BaseException as exc:  # re-raised on the caller's thread
             box["error"] = exc
+        finally:
+            _inflight[0] = None
+            if _abandoned[0] is box:
+                _abandoned[0] = None
         box["done"].set()
 
 
@@ -129,40 +152,77 @@ def _dismiss_own_busy_dialogs():
     return dismissed
 
 
-def call(fn, *args, timeout=240, **kwargs):
+def call(fn, *args, timeout=240, retry_safe=False, **kwargs):
+    """Run fn on the COM worker thread.
+
+    retry_safe must only be set for functions that are safe to run twice (pure
+    reads). A dead COM pointer used to replay every call once, including
+    origin_write/origin_plot — the model then saw a timeout, retried, and the
+    side effect had already been performed twice.
+    """
     global _thread, _suspect
     with _thread_lock:
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_worker, daemon=True, name="origin-com")
             _thread.start()
+    busy = _abandoned[0]
+    if busy is not None and busy.get("started") and not busy["done"].is_set():
+        # The previous call timed out while the worker was inside COM; it may still
+        # be running. Queueing behind it only produces a second timeout and hides
+        # the real state, so refuse until the worker frees up.
+        raise OriginError(
+            "origin_busy",
+            "上一次调用超时后仍在 Origin 里执行，结果未知；现在再排队只会撞在同一个卡住的 COM 调用后面",
+            ["用 origin_instances 看 Origin 是否卡在弹窗/对话框",
+             "必要时 origin_exit 或结束 Origin64.exe，然后重试"])
     if _suspect:
         # A previous call left Origin's COM channel in a bad state (a destroyed page
         # keeps a C-level error pending, which then surfaces from an unrelated call).
         # Re-attach once, lazily, so one wedge does not poison the whole session.
         _suspect = False
-        _reset_connection()
+        _reset_connection_in_place()
     for attempt in (0, 1):
-        box = {"done": threading.Event()}
+        box = {"done": threading.Event(), "cancel": threading.Event(), "started": False}
         _q.put((fn, args, kwargs, box))
         if not box["done"].wait(timeout):
             # The likeliest non-crash block is the "正由另一个程序控制" message box:
             # someone asked Origin to close while a client holds COM. It is our hold
             # as often as not, so click the box and give the queued call a grace
             # window instead of timing out with advice the model cannot act on.
+            box["cancel"].set()
             dismissed = _dismiss_all_busy_dialogs()
             if dismissed and box["done"].wait(15):
                 pass
+            elif box["done"].is_set():
+                pass                       # finished (or cancelled) during the grace
             else:
+                if box.get("started"):
+                    _abandoned[0] = box
+                    state = "unknown"      # it is inside Origin right now
+                    hint = "这次任务可能仍在 Origin 里继续执行，结果未知"
+                else:
+                    box["done"].wait(1.0)  # give the worker a moment to skip it
+                    state = "cancelled" if box["done"].is_set() else "queued"
+                    hint = ("任务还没开始，已取消" if state == "cancelled"
+                            else "任务还在队列里没开始，取消标记已设下")
                 raise OriginError(
                     "com_timeout",
-                    "Origin 在 %d 秒内没有响应%s" % (
-                        timeout,
+                    "Origin 在 %d 秒内没有响应；%s%s" % (
+                        timeout, hint,
                         "（挡着一个「%s」的对话框，已替你点掉，重试仍超时说明还有别的弹窗）"
                         % dismissed[0] if dismissed else ""),
                     ["看 Origin 窗口是否卡在其他对话框或许可证弹窗（origin_instances 会逐个报告）",
+                     "任务结果未知时先 origin_inspect 确认真实状态，再决定要不要重做",
                      "任务管理器结束 Origin64.exe 后重试"],
+                    executed=state,
                 )
         if "error" not in box:
+            if box.get("cancelled"):
+                raise OriginError(
+                    "com_timeout",
+                    "Origin 在 %d 秒内没有响应；任务还没开始，已取消" % timeout,
+                    ["origin_instances 看 Origin 是否卡住", "必要时结束 Origin64.exe 后重试"],
+                    executed="cancelled")
             # A close attempt during the call leaves the busy box on screen even
             # after the call succeeds — clear it before handing the result back.
             _dismiss_own_busy_dialogs()
@@ -170,9 +230,13 @@ def call(fn, *args, timeout=240, **kwargs):
         exc = box["error"]
         # Once per call: Origin's cached COM pointer can go stale when the process
         # dies (user closed it, instance limit, exit tool). Every later call then
-        # fails identically, so drop the pointer and let origin() re-attach.
-        if attempt == 0 and _dead_app(exc) and _reset_connection():
-            continue
+        # fails identically, so always drop the pointer and let origin() re-attach
+        # — but only declared-safe (read-only) functions are replayed. A write that
+        # failed halfway must surface, not run twice.
+        if attempt == 0 and _dead_app(exc):
+            reset_ok = _reset_connection_in_place()
+            if retry_safe and reset_ok:
+                continue
         raise exc
 
 
@@ -195,6 +259,7 @@ def _dead_app(exc):
 def _reset_connection():
     """Forget the cached originpro module and its dangling Application pointer."""
     global _op, _suspect
+    _trace_thread("reset")
     _op = None
     _suspect = False
     # Page wrappers belong to the Origin process we just lost: keeping them would
@@ -230,6 +295,12 @@ def origin():
         raise OriginError("missing_originpro", "这个 Python 环境里没有 originpro：%s" % exc,
                           ["pip install originpro"])
     holder = _session_lock_acquire()
+    if holder and holder.get("error"):
+        # Fail closed: without a lock we cannot rule out a second session driving
+        # the same Origin, and the damage (interleaved calls, one session's
+        # close_pages evicting the other's handles) is worse than a clear refusal.
+        raise OriginError(holder["error"], holder["message"],
+                          holder.get("next_actions") or [])
     if holder:
         raise OriginError(
             "origin_busy",
@@ -256,7 +327,14 @@ def origin():
     existing = {row["pid"] for row in before} if before is not None else set()
     after = _process_rows()
     if after is not None:
-        _started_pids.update(row["pid"] for row in after if row["pid"] not in existing)
+        # Forget instances that died while we were not looking (user closed
+        # Origin, crash): a stale pid would otherwise make _attached_pid()
+        # ambiguous on the next exit.
+        _started_pids.intersection_update({row["pid"] for row in after})
+        new_rows = [row for row in after if row["pid"] not in existing]
+        _started_pids.update(row["pid"] for row in new_rows)
+        _owned_record(new_rows)
+    _trace_thread("attach")
     _op = op
     return op
 
@@ -265,6 +343,71 @@ def origin():
 
 ORIGIN_EXE = "Origin64.exe"
 _started_pids = set()   # instances that appeared because WE connected
+
+
+# Ownership on disk: a bridge that crashes leaves its Origin running, and the
+# next session must be able to tell "this orphan is ours from a previous run"
+# apart from "somebody else's background Origin". pid alone is not proof (pids
+# are reused); the pair (pid, process start time) is.
+def _owned_file():
+    return os.path.join(_SESSION_DIR, "owned.json")
+
+
+def _owned_load():
+    try:
+        with open(_owned_file(), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for key, value in data.items():
+        try:
+            if isinstance(value, str):
+                out[int(key)] = value
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _owned_save(owned):
+    try:
+        os.makedirs(_SESSION_DIR, exist_ok=True)
+        tmp = _owned_file() + ".%d.tmp" % os.getpid()
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({str(k): v for k, v in owned.items()}, fh)
+        os.replace(tmp, _owned_file())
+    except OSError:
+        pass
+
+
+def _owned_record(rows):
+    """Remember instances we spawned: pid + the start time the probe saw."""
+    owned = _owned_load()
+    for row in rows:
+        if row.get("started"):
+            owned[int(row["pid"])] = row["started"]
+    _owned_save(owned)
+
+
+def _owned_forget(pids):
+    owned = _owned_load()
+    changed = False
+    for pid in pids:
+        if owned.pop(int(pid), None) is not None:
+            changed = True
+    if changed:
+        _owned_save(owned)
+
+
+def _row_owned(row, owned=None):
+    """Proof of ownership: same session, or the recorded (pid, start time)."""
+    pid = row["pid"]
+    if pid in _started_pids:
+        return True
+    owned = _owned_load() if owned is None else owned
+    return bool(row.get("started")) and owned.get(pid) == row["started"]
 
 
 def _process_rows():
@@ -388,8 +531,34 @@ def _dismiss_busy_dialogs(pid):
     return dismissed
 
 
-def _close_pid(pid):
-    """Ask for a polite exit first; escalate to a forced kill only if it survives."""
+def _wait_pid_gone(pid, started="", timeout=5.0):
+    """'gone' | 'alive' | 'unknown'. Polls the cheap liveness check; the process
+    table (one powershell spawn) is consulted once, at the deadline, so a 5 s
+    wait no longer spawns ~20 powershell processes."""
+    deadline = time.time() + timeout
+    while True:
+        if not _pid_alive(pid):
+            return "gone"          # exit code already says dead (pid may be a zombie)
+        if time.time() >= deadline:
+            rows = _process_rows()
+            if rows is None:
+                return "unknown"
+            row = next((r for r in rows if r["pid"] == pid), None)
+            if row is None:
+                return "gone"
+            if started and row.get("started") and row["started"] != started:
+                return "gone"
+            return "alive"
+        time.sleep(0.25)
+
+
+def _close_pid(pid, started="", verify_timeout=5.0):
+    """Ask for a polite exit first; escalate to a forced kill only if it survives.
+
+    Returns 'closed' | 'force_closed' | 'stuck' | 'unverified'. 'force_closed'
+    means taskkill ran AND the process is confirmed gone — reporting the kill
+    alone is how a still-running Origin got counted as reclaimed.
+    """
     _terminate(pid)
     for _ in range(6):
         time.sleep(0.5)
@@ -401,13 +570,23 @@ def _close_pid(pid):
         rows = _process_rows()
         if rows is None:
             continue  # probe failed; keep polling rather than guessing "gone"
-        if pid not in {row["pid"] for row in rows}:
+        row = next((r for r in rows if r["pid"] == pid), None)
+        if row is None:
             return "closed"
+        if started and row.get("started") and row["started"] != started:
+            return "closed"                   # pid reused: our instance is gone
     rows = _process_rows()
-    if rows is not None and pid not in {row["pid"] for row in rows}:
-        return "closed"
+    if rows is not None:
+        row = next((r for r in rows if r["pid"] == pid), None)
+        if row is None:
+            return "closed"
+        if started and row.get("started") and row["started"] != started:
+            return "closed"                   # pid reused before the kill landed
     _terminate(pid, force=True)
-    return "force_closed"
+    state = _wait_pid_gone(pid, started, timeout=verify_timeout)
+    if state == "gone":
+        return "force_closed"
+    return "stuck" if state == "alive" else "unverified"
 
 
 def instances():
@@ -417,9 +596,10 @@ def instances():
         return sanitize({"count": None, "probe": "unavailable",
                          "error": "读不到进程表（powershell 不可用或超时），无法确定实例数量",
                          "next_actions": ["重试 origin_instances", "或在任务管理器里看 Origin64.exe"]})
+    owned = _owned_load()
     for row in rows:
         row["foreground"] = bool(row["window"])
-        row["ours"] = row["pid"] in _started_pids
+        row["ours"] = _row_owned(row, owned)
         row["busy_dialogs"] = [b["body"].replace("\n", " ")[:60] for b in _busy_dialogs(row["pid"])]
     return sanitize({"count": len(rows), "probe": "ok",
                      "background": [r for r in rows if not r["foreground"]],
@@ -427,23 +607,48 @@ def instances():
                      "started_by_us": sorted(_started_pids)})
 
 
-def reclaim(close_background=True):
-    """Close windowless Origin instances; a visible window is reported, never killed.
+def reclaim(close_background=True, include_orphans=False, _detach=True):
+    """Close Origin instances this bridge can prove it started; a visible window
+    is reported, never killed.
 
-    An instance with no window has no client and no human in front of it. One with
-    a window may be the user's own unsaved work, so it is listed for them to close.
+    No window does NOT mean "no owner": a script started by someone else also
+    runs without one. Ownership is this session's `_started_pids` or the on-disk
+    (pid, start time) record from a previous bridge run; everything else is
+    reported as `unowned` and left alone unless `include_orphans` is explicitly
+    requested. Every close is confirmed against the process table — `force_closed`
+    means "taskkill ran and the process is gone", not "a kill was sent".
     """
+    state, held = _session_lock_read()
+    if state == "ok" and held.get("bridge_pid") != os.getpid() \
+            and _pid_alive(held.get("bridge_pid")):
+        return sanitize({"probe": "locked", "closed": [], "force_closed": [],
+                         "stuck": [], "unverified": [], "unowned": [],
+                         "left_running": [],
+                         "locked_by": held.get("bridge_pid"),
+                         "error": "另一个桥会话正在驱动 Origin（bridge_pid=%s）"
+                                  % held.get("bridge_pid"),
+                         "notify": "另一个会话持有 Origin，这次什么都没动（它可能正在用这些实例）。"
+                                   "等它退出或调用 origin_exit 后再回收。"})
+    if state in ("corrupt", "unreadable"):
+        return sanitize({"probe": "locked", "closed": [], "force_closed": [],
+                         "stuck": [], "unverified": [], "unowned": [],
+                         "left_running": [],
+                         "error": "会话锁读不出来（%s），无法确认有没有别的桥在用 Origin" % state,
+                         "notify": "锁文件 %s 读不出来，这次什么都没动；确认没有别的桥在跑后删掉它再试。"
+                                   % _SESSION_LOCK})
     rows = _process_rows()
     if rows is None:
-        return sanitize({"closed": [], "force_closed": [], "left_running": [],
+        return sanitize({"closed": [], "force_closed": [], "stuck": [], "unverified": [],
+                         "unowned": [], "left_running": [],
                          "probe": "unavailable",
                          "error": "读不到进程表，没有动任何进程",
                          "notify": "无法确认实例情况（进程探测失败），这次什么都没关。"})
     back = [r for r in rows if not r["window"]]
     front = [r for r in rows if r["window"]]
-    result = {"probe": "ok", "closed": [], "force_closed": [],
-              "left_running": [r["pid"] for r in front], "notify": "",
-              "dismissed_dialogs": []}
+    owned = _owned_load()
+    result = {"probe": "ok", "closed": [], "force_closed": [], "stuck": [],
+              "unverified": [], "unowned": [], "left_running": [r["pid"] for r in front],
+              "notify": "", "dismissed_dialogs": []}
     # A foreground instance with the busy box up is stuck BECAUSE a client holds
     # COM (ours as often as not): click the box even though the instance itself
     # stays hands-off. Any other dialog is never touched.
@@ -452,56 +657,115 @@ def reclaim(close_background=True):
             result["dismissed_dialogs"].append({"pid": row["pid"], "title": title})
     if result["dismissed_dialogs"]:
         result["notify"] += "替你点掉了 %d 个「另一个程序控制」弹窗；" % len(result["dismissed_dialogs"])
+
+    mine = [r for r in back if _row_owned(r, owned)]
+    others = [r for r in back if not _row_owned(r, owned)]
+    for row in others:
+        result["unowned"].append({"pid": row["pid"], "started": row.get("started", "")})
+
     if not close_background:
-        result["skipped"] = [r["pid"] for r in back]
+        result["skipped"] = [r["pid"] for r in mine]
+        if others:
+            result["notify"] += ("%d 个无窗口实例归属不明（不是本桥启动的），没有动它们；"
+                                 % len(others))
         return sanitize(result)
 
     for row in back:
         pid = row["pid"]
+        is_owned = _row_owned(row, owned)
+        if not is_owned and not include_orphans:
+            continue
         try:
-            if pid in _started_pids:
-                # Reclaiming the instance WE are attached to: a WM_CLOSE while our
+            if is_owned and _detach:
+                # Reclaiming an instance WE are attached to: a WM_CLOSE while our
                 # COM connection is alive parks the "正由另一个程序控制" box on
                 # screen until the force-kill lands. Dropping the cached pointer
-                # first (same thread that attached — this runs inside call())
-                # makes the same close exit clean in about a second.
+                # first gives the close a chance to exit clean. The server calls
+                # reclaim_safe(), which runs this on the COM worker whenever the
+                # worker is free — the thread that attached.
                 _reset_connection()
-            outcome = _close_pid(pid)
+            outcome = _close_pid(pid, row.get("started", ""))
         except Exception as exc:
             result["left_running"].append(pid)
             result["notify"] += "PID %s 关不掉：%s；" % (pid, exc)
             continue
         result[outcome].append(pid)
+        if outcome in ("closed", "force_closed"):
+            _started_pids.discard(pid)
+            _owned_forget([pid])
+        else:
+            result["left_running"].append(pid)
 
+    # A forced orphan that did get closed is no longer "unowned leftover".
+    closed_now = set(result["closed"]) | set(result["force_closed"])
+    result["unowned"] = [u for u in result["unowned"] if u["pid"] not in closed_now]
+
+    for pid in result["stuck"]:
+        result["notify"] += "PID %s 强杀后仍在运行，需要手动处理；" % pid
+    for pid in result["unverified"]:
+        result["notify"] += "PID %s 是否已退出无法核实（进程探测不可用）；" % pid
+    if others and not include_orphans:
+        result["notify"] += ("%d 个无窗口实例不是本桥启动的，没有动它们（pid %s）；"
+                             "确认可以关就 origin_reclaim(include_orphans=true)。"
+                             % (len(others), ", ".join(str(r["pid"]) for r in others)))
     if front:
         result["notify"] += ("检测到 %d 个**有窗口**的 Origin 实例，没有动它们（可能是你自己开着的项目，"
                             "含未保存工作）。要释放实例配额请自己关掉这些窗口，"
                             "或先 origin_save_project 保存。") % len(front)
     if not result["notify"]:
-        result["notify"] = "已回收全部后台实例，没有发现前台窗口。"
-    _started_pids.difference_update(result["closed"] + result["force_closed"])
+        result["notify"] = "已回收全部本桥启动的后台实例，没有发现前台窗口。"
     return sanitize(result)
 
 
+def reclaim_safe(close_background=True, include_orphans=False):
+    """Reclaim from the server thread without detaching on the wrong thread.
+
+    When the COM worker is free the whole reclaim runs on it, so the detach
+    happens where the attachment lives. When the worker is wedged inside COM,
+    killing processes still works but touching the COM globals would race a live
+    call — the kill runs on the caller and the wedge is left to fail on its own.
+    """
+    if _inflight[0] is None:
+        return call(lambda: reclaim(close_background, include_orphans), timeout=180)
+    return reclaim(close_background, include_orphans, _detach=False)
+
+
+def _reset_connection_in_place():
+    """Prefer detaching on the COM worker; fall back to the caller when the
+    worker is wedged or gone (interpreter shutdown). Returns the reset result."""
+    if _inflight[0] is None and _thread is not None and _thread.is_alive():
+        try:
+            return bool(call(_reset_connection, timeout=5))
+        except Exception:
+            pass
+    return _reset_connection()
+
+
 def _release_on_exit():
-    """A client that exits must not leave its own Origin instance running."""
-    _session_lock_release()
-    if not _started_pids:
-        return
+    """A client that exits must not leave its own Origin instance running.
+
+    Cleanup first, lock last: releasing the lock before the instance is gone
+    lets the next session start against a half-closed Origin. Only instances
+    THIS process started are touched: another bridge's on-disk record must not
+    let a short-lived client kill a live session's Origin at interpreter exit.
+    """
     try:
-        rows = _process_rows()
-        if rows is None:
-            return  # cannot tell which pids are ours; leaving Origin is the safe error
-        # A WM_CLOSE that lands while we still hold the COM connection makes Origin
-        # raise the "正由另一个程序控制" box and refuse to exit — visible even for a
-        # windowless instance (probe 2026-11-08: box up ~12 s until force-kill;
-        # after dropping the cached pointer the same close exits clean in ~1 s).
-        _reset_connection()
-        for row in rows:
-            if row["pid"] in _started_pids and not row["window"]:
-                _close_pid(row["pid"])
-    except Exception:
-        pass
+        if not _started_pids:
+            return
+        try:
+            rows = _process_rows()
+            if rows is None:
+                return  # cannot tell which pids are ours; leaving Origin is the safe error
+            _reset_connection_in_place()
+            for row in rows:
+                if row["window"]:
+                    continue
+                if row["pid"] in _started_pids:
+                    _close_pid(row["pid"], row.get("started", ""))
+        except Exception:
+            pass
+    finally:
+        _session_lock_release()
 
 
 # ------------------------------------------------- cross-session Origin lock
@@ -512,13 +776,19 @@ def _release_on_exit():
 # file turns the silent stomp into a named origin_busy error naming the other
 # bridge's pid. Advisory by nature — a user can always delete the file.
 
-_SESSION_LOCK = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-                             "origin-bridge", "session.lock")
+_SESSION_DIR = os.environ.get("ORIGIN_BRIDGE_LOCK_DIR") or os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "origin-bridge")
+_SESSION_LOCK = os.path.join(_SESSION_DIR, "session.lock")
 
 
 def _pid_alive(pid):
-    if not pid or pid == os.getpid():
-        return pid == os.getpid() and bool(pid)
+    """True when the pid is (or might be) alive. Unknown pids count as alive:
+    treating an unreadable owner as dead is what let two sessions claim the
+    same lock."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return True
+    if pid == os.getpid():
+        return True
     if os.name != "nt":
         try:
             os.kill(pid, 0)
@@ -545,52 +815,161 @@ def _pid_alive(pid):
         k32.CloseHandle(handle)
 
 
-def _session_lock_read():
+def _session_lock_read(path=None):
+    """Return (state, info). state: missing | ok | corrupt | unreadable.
+
+    `corrupt` covers an empty or half-written file: during a scan the old code
+    read `{}`, judged the owner dead and stole a lock that was being written.
+    A corrupt file is now its own state and is never a reason to steal.
+    """
+    path = path or _SESSION_LOCK
     try:
-        with open(_SESSION_LOCK, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return "missing", None
+    except OSError:
+        return "unreadable", None
+    try:
+        info = json.loads(raw)
+    except ValueError:
+        return "corrupt", None
+    if (not isinstance(info, dict)
+            or not isinstance(info.get("bridge_pid"), int)
+            or isinstance(info.get("bridge_pid"), bool)):
+        return "corrupt", None
+    return "ok", info
+
+
+def _session_lock_write_new(info):
+    """Create the lock with its content already in it. Atomic on NTFS: the
+    content is written to a private temp file and hard-linked into place, so a
+    concurrent reader can never observe an empty lock.
+
+    Returns None on success, "exists" when someone else holds it. OSError on a
+    filesystem without hard links / unwritable directory."""
+    payload = json.dumps(info) + "\n"
+    tmp = "%s.%d.tmp" % (_SESSION_LOCK, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        try:
+            os.link(tmp, _SESSION_LOCK)
+        except FileExistsError:
+            return "exists"
+        except OSError:
+            # No hard-link support (FAT/network share): fall back to O_EXCL +
+            # write. The half-written window remains, but readers now refuse to
+            # steal a corrupt file instead of declaring it dead.
+            try:
+                with open(_SESSION_LOCK, "x", encoding="utf-8") as fh:
+                    fh.write(payload)
+            except FileExistsError:
+                return "exists"
+            except OSError:
+                # We created the file but could not fill it; leaving an empty
+                # lock behind would block every future session. Remove our own
+                # half-written file (O_EXCL guarantees nobody else owns it).
+                try:
+                    os.remove(_SESSION_LOCK)
+                except OSError:
+                    pass
+                raise
         return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _session_lock_acquire():
-    """Claim exclusive driving rights. Returns the OTHER live bridge's info on
-    conflict, else None (fresh claim or stolen stale lock)."""
+    """Claim exclusive driving rights.
+
+    None = acquired (fresh, ours already, or a proven-dead owner's lock taken
+    over). Dict with bridge_pid/started_at = another live session. Dict with
+    `error` = cannot establish ownership (unwritable path, unreadable/corrupt
+    lock); the caller must NOT drive Origin in that state.
+    """
     info = {"bridge_pid": os.getpid(),
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     try:
-        os.makedirs(os.path.dirname(_SESSION_LOCK), exist_ok=True)
-        # O_EXCL creation is the real mutual exclusion; FileExistsError means
-        # someone holds it and we go validate whether they are still alive.
-        with open(_SESSION_LOCK, "x", encoding="utf-8") as fh:
-            json.dump(info, fh)
-        return None
-    except FileExistsError:
-        held = _session_lock_read() or {}
+        os.makedirs(_SESSION_DIR, exist_ok=True)
+    except OSError as exc:
+        return {"error": "lock_unavailable", "path": _SESSION_LOCK,
+                "message": "建不了锁目录 %s：%s。没有锁就无法排除另一个会话正在驱动 Origin"
+                           % (_SESSION_DIR, exc),
+                "next_actions": ["把 ORIGIN_BRIDGE_LOCK_DIR 指到一个可写目录后重试",
+                                 "确认 %s 的权限后重试" % _SESSION_DIR]}
+
+    for _ in range(4):
+        try:
+            made = _session_lock_write_new(info)
+        except OSError as exc:
+            return {"error": "lock_unavailable", "path": _SESSION_LOCK,
+                    "message": "写不了锁文件 %s：%s。拒绝在无法确认独占的情况下驱动 Origin"
+                               % (_SESSION_LOCK, exc),
+                    "next_actions": ["把 ORIGIN_BRIDGE_LOCK_DIR 指到一个可写目录后重试",
+                                     "检查杀毒软件/权限是否锁住了 %s" % _SESSION_DIR]}
+        if made is None:
+            return None
+        state, held = _session_lock_read()
+        if state == "missing":
+            continue                     # released between create-fail and read
+        if state in ("corrupt", "unreadable"):
+            return {"error": "lock_unreadable", "path": _SESSION_LOCK,
+                    "message": "锁文件 %s 读不出来（%s）。可能是另一个会话正在写，"
+                               "也可能是文件坏了；两种情况都不能安全抢占" % (_SESSION_LOCK, state),
+                    "next_actions": ["等几秒重试", "确认没有别的桥在跑后删掉这个文件再重试"]}
         other = held.get("bridge_pid")
         if other == os.getpid():
-            return None                      # our own lock from an earlier connect
+            return None                  # our own lock from an earlier connect
         if _pid_alive(other):
-            return {"bridge_pid": other,
-                    "started_at": held.get("started_at", "?")}
-        # dead owner: steal
+            return {"bridge_pid": other, "started_at": held.get("started_at", "?")}
+        # Stale lock: move it aside. os.rename is the arbitration — exactly one
+        # of two racing processes wins the rename, the other gets FileNotFoundError
+        # and loops to inspect whoever took over.
+        stale = "%s.stale.%d" % (_SESSION_LOCK, os.getpid())
         try:
-            with open(_SESSION_LOCK, "w", encoding="utf-8") as fh:
-                json.dump(info, fh)
+            os.rename(_SESSION_LOCK, stale)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return {"error": "lock_unreadable", "path": _SESSION_LOCK,
+                    "message": "锁属于已退出的进程，但挪不走：%s" % exc,
+                    "next_actions": ["手动删除 %s 后重试" % _SESSION_LOCK]}
+        state2, held2 = _session_lock_read(stale)
+        if state2 == "ok" and _pid_alive(held2.get("bridge_pid")):
+            # Lost the race to a live owner (it re-created the lock): restore.
+            try:
+                os.link(stale, _SESSION_LOCK)
+            except OSError:
+                pass
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+            return {"bridge_pid": held2.get("bridge_pid"),
+                    "started_at": held2.get("started_at", "?")}
+        try:
+            os.remove(stale)
         except OSError:
             pass
-        return None
-    except OSError:
-        return None                          # cannot write the lock: degrade open
+        # loop: create the fresh lock (may lose to another thief, that's fine)
+    return {"error": "lock_unavailable", "path": _SESSION_LOCK,
+            "message": "锁在反复抢占中一直不稳定（4 次重试）",
+            "next_actions": ["稍后重试", "确认没有别的桥在跑后删掉锁文件"]}
 
 
 def _session_lock_release():
-    held = _session_lock_read()
-    if held and held.get("bridge_pid") == os.getpid():
+    state, held = _session_lock_read()
+    if state == "ok" and held.get("bridge_pid") == os.getpid():
         try:
             os.remove(_SESSION_LOCK)
+            return True
         except OSError:
             pass
+    return False
 
 
 atexit.register(_release_on_exit)
@@ -927,7 +1306,7 @@ def status():
             "note": "pro_hint 只是从安装路径推断；Pro 能力以 origin_fit 能否跑通为准",
         }
 
-    return call(run)
+    return call(run, retry_safe=True)
 
 
 def read_file(path, comment=None):
@@ -2155,7 +2534,28 @@ def inspect(graph=""):
             out.update({"graph": _safe(lambda: page.name, ""), "layers": layers})
         return sanitize(out)
 
-    return call(run)
+    return call(run, retry_safe=True)
+
+
+def _attached_pid(rows):
+    """The Origin pid this session started, when it can be known unambiguously."""
+    if len(_started_pids) == 1:
+        return next(iter(_started_pids))
+    return None
+
+
+def _exit_confirmed(pid, before):
+    """'gone' | 'alive' | 'unknown' after an exit request."""
+    if pid is not None:
+        started = next((r.get("started", "") for r in (before or []) if r["pid"] == pid), "")
+        return _wait_pid_gone(pid, started, timeout=8.0)
+    # Attached to an instance we did not start: at least one Origin must vanish.
+    after = _process_rows()
+    if after is None or before is None:
+        return "unknown"
+    if len(after) < len(before):
+        return "gone"
+    return "alive"
 
 
 def exit_origin(save_to=""):
@@ -2166,15 +2566,41 @@ def exit_origin(save_to=""):
         dismissed = _dismiss_all_busy_dialogs()
         op = origin()
         saved = _save_project(save_to)["path"] if save_to else ""
-        _safe(op.exit)
+        before = _process_rows()
+        pid = _attached_pid(before)
+        err = ""
+        try:
+            op.exit()
+        except Exception as exc:
+            # Do not report success on the strength of having *asked*: verify below,
+            # then either say it worked (with the warning) or fail honestly.
+            err = "%s: %s" % (type(exc).__name__, exc)
+        state = _exit_confirmed(pid, before)
         _handles.clear()
         _names.clear()
         _project_file = ""
         _reset_connection()
         _reset_growth()
-        _session_lock_release()   # free the slot while this process stays alive
-        return sanitize({"exited": True, "saved": saved,
-                         **({"dismissed_dialogs": dismissed} if dismissed else {})})
+        if state != "gone":
+            # Keep the lock: an Origin may still be running under this session, and
+            # letting the next session in would attach to a half-closed instance.
+            raise OriginError(
+                "exit_unconfirmed",
+                "发出退出请求后没能确认 Origin 已退出（%s）%s"
+                % (state, ("；退出调用还报错：" + err) if err else ""),
+                ["用 origin_instances 看还有哪些实例在跑",
+                 "还在的话再调一次 origin_exit，或在任务管理器结束 Origin64.exe",
+                 "锁仍由本会话持有，避免另一个会话接上一个没关干净的 Origin"])
+        _session_lock_release()   # only after the instance is confirmed gone
+        if pid is not None:
+            _started_pids.discard(pid)
+            _owned_forget([pid])
+        out = {"exited": True, "saved": saved, "pid": pid or "unknown"}
+        if err:
+            out["warning"] = "退出调用报了错，但进程已确认退出：" + err
+        if dismissed:
+            out["dismissed_dialogs"] = dismissed
+        return sanitize(out)
 
     return call(run)
 

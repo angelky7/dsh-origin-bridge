@@ -156,18 +156,23 @@ def main():
           (no.get("code"), str(no.get("message"))[:60]))
     imp = rpc.tool("origin_import", {"path": os.path.join(HERE, "sample.dat")}, timeout=200)
     pl = rpc.tool("origin_plot", {"worksheet": imp["worksheet"], "x": 1, "y": 2}, timeout=200)
+    pl2 = rpc.tool("origin_plot", {"worksheet": imp["worksheet"], "x": 1, "y": 2,
+                                   "plot_type": "scatter"}, timeout=200)
     batch = rpc.tool("origin_export", {"path": os.path.join(SANDBOX, "all_out"),
                                        "all_graphs": True, "fmt": "png"}, timeout=240)
     items = batch.get("exported") or []
     ok_files = [i for i in items if os.path.isfile(i.get("file", ""))]
-    check("export_all writes every graph page",
-          batch.get("ok") is True and len(items) >= 1 and len(ok_files) == len(items),
-          (batch.get("code"), len(items), len(ok_files)))
+    check("export_all writes every graph page (two pages, two files)",
+          batch.get("ok") is True and len(items) == 2 and len(ok_files) == 2
+          and {i.get("graph") for i in items} == {pl.get("graph_page"), pl2.get("graph_page")},
+          (batch.get("code"), len(items), len(ok_files),
+           [i.get("graph") for i in items]))
 
     # 9b) a page whose target is unwritable lands in `failed` without dragging
     # the batch down. The plotted page's name is known from the plot response.
     import stat as _stat
     page_name = pl.get("graph_page") or "Graph1"
+    other_page = pl2.get("graph_page") or "Graph2"
     fail_dir = os.path.join(SANDBOX, "all_fail")
     os.makedirs(fail_dir, exist_ok=True)
     blocker = os.path.join(fail_dir, page_name + ".png")
@@ -177,13 +182,17 @@ def main():
     try:
         bf = rpc.tool("origin_export", {"path": fail_dir, "all_graphs": True}, timeout=240)
         failed = bf.get("failed") or []
-        check("export_all reports the blocked page in failed",
-              bf.get("ok") is True and len(failed) >= 1
+        exported = bf.get("exported") or []
+        check("export_all reports exactly the blocked page",
+              bf.get("ok") is True and [f.get("graph") for f in failed] == [page_name]
               and failed[0].get("code") == "target_locked",
               (bf.get("code"), [(f.get("graph"), f.get("code")) for f in failed]))
-        check("blocked page does not drag other pages",
-              (bf.get("proof_level") in ("partial", "unverified")),
-              bf.get("proof_level"))
+        check("the other page is still exported and on disk",
+              [i.get("graph") for i in exported] == [other_page]
+              and os.path.isfile(exported[0].get("file", "")),
+              [(i.get("graph"), os.path.isfile(i.get("file", ""))) for i in exported])
+        check("proof_level degrades to partial (not unverified)",
+              bf.get("proof_level") == "partial", bf.get("proof_level"))
     finally:
         os.chmod(blocker, _stat.S_IWRITE)
 
@@ -267,17 +276,19 @@ def main():
           gone and not boxes and target is not None,
           (target, gone, boxes[:2]))
 
-    bad = [n for n, ok in results if not ok]
     # Same teardown as smoke_test: reclaim only the windowless instances this run
     # started; an older one may belong to a live dsh session.
     late = [r for r in S.originlab._process_rows()
             if not r["window"] and str(r.get("started") or "") >= S.STARTED_AT]
     for row in late:
-        S.originlab._close_pid(row["pid"])
+        S.originlab._close_pid(row["pid"], row.get("started", ""))
     left = [r for r in S.originlab._process_rows()
             if not r["window"] and str(r.get("started") or "") >= S.STARTED_AT]
     check("run leaves no Origin instance", not left, left)
 
+    # Only now compute failures: this used to run before the final check, so a
+    # failing teardown still exited 0.
+    bad = [n for n, ok in results if not ok]
     print("\n%d/%d passed" % (len(results) - len(bad), len(results)))
     if bad:
         print("FAILED:", ", ".join(bad))

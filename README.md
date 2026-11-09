@@ -40,7 +40,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1139 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1139 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 166、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **424 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 52、smoke 129、edge 35、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1139 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1139 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1139 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 166、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **473 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 100、smoke 129、edge 36、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1139 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -131,17 +131,17 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 项，看到 ALL GOOD 才算过
-.\.venv\Scripts\python.exe edge_checks.py             # 35 项边界
+.\.venv\Scripts\python.exe edge_checks.py             # 36 项边界
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 15 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-.\.venv\Scripts\python.exe test_lifecycle.py          # 52 项，不需要 Origin：实例分类/回收/掉线重连/会话锁的安全边界
+.\.venv\Scripts\python.exe test_lifecycle.py          # 100 项，不需要 Origin：实例分类/归属回收/掉线重连/超时取消/退出核实/会话锁的安全边界
 .\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 项，不需要 Origin：返回值必须是严格 JSON
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 424 项随包发布，你可以自己复跑。另外那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 473 项随包发布，你可以自己复跑。另外那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -215,7 +215,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 | `origin_labtalk` | 逃生舱：原始 LabTalk + 强制读回 |
 | `origin_exit` | 关 Origin，可选先存盘 |
 | `origin_instances` | 清点机器上的 Origin 实例：后台无窗口（客户端退出后的残留）vs 前台有窗口（可能是用户自己的项目），并标出哪些是本进程起的 |
-| `origin_reclaim` | 回收残留实例：**只关没有窗口的**；有窗口的一律不动，只在返回里提示用户自己关。`close_background:false` 只看不动手 |
+| `origin_reclaim` | 回收残留实例：默认**只关本桥能证明是自己启动的**（本会话记录，或上次运行留下的 pid+启动时间记录），且只关没有窗口的；归属不明的无窗口实例只在 `unowned` 里报告，确认可用 `include_orphans:true` 才关；有窗口的一律不动。强杀后会核实进程确实退出，没退报 `stuck`。`close_background:false` 只看不动手 |
 | `origin_figure` | 主路径：导入→画图→轴标题→图例→图片+opju 一次完成 |
 
 ## 工作站 `.bin` 是怎么回事
@@ -296,9 +296,9 @@ Origin Bridge 的做法：
 - 千分位和逗号分隔符同形的文件（不加引号的 `0,1,234.5`）没法机械还原：桥按最宽行补齐并报"行长度不一致"，不会假装列数对得上。欧陆小数点（`0,5`）只在分隔符是 `;` 或 tab 时才认。
 - Origin 以管理员运行而 Python 不是（或反之）时 COM 连不上，两侧权限要一致。
 - 长会话攒太多页面会让 COM 桥报"无效指针"。`origin_close_pages` 能清，根治是 `origin_exit` 后重连。2026-10-20 实测到 300 页仍不崩，但每张图的耗时从 0.7 秒（前 100 页）涨到 2.8 秒（200–300 页）——所以 `origin_plot`/`origin_matrix` 每新建 50 个页面会在 `warnings` 里提醒一次（计数不花额外 COM 调用，`origin_close_pages`/`origin_exit`/`origin_open` 会清零）。
-- **Origin 实例不会跟着客户端退出**：originpro 需要时自己拉一个 Origin，Python 进程结束那个实例还在。攒够就会报"实例超过上限"。现在插件在进程退出时回收**自己起的、且没有窗口的**实例（`atexit`），历史残留用 `origin_reclaim` 清；有窗口的实例永远不动，因为那可能是你正开着的项目。
+- **Origin 实例不会跟着客户端退出**：originpro 需要时自己拉一个 Origin，Python 进程结束那个实例还在。攒够就会报"实例超过上限"。现在插件在进程退出时回收**自己起的、且没有窗口的**实例（`atexit`），历史残留用 `origin_reclaim` 清；归属用 pid + 进程启动时间双匹配，pid 被复用也不会误杀；有窗口的实例永远不动，因为那可能是你正开着的项目。
 - 统计批处理（t 检验 / ANOVA / PCA / 生存分析）没有，originpro 本身也不提供。
-- **并发由锁守护**：两个会话同时驱动 Origin 会互相踩页面和句柄——现在第一个接入的桥持有 `%LOCALAPPDATA%\origin-bridge\session.lock`，后来的活桥会得到具名的 `origin_busy`（报出占用方 pid），持有方退出或 `origin_exit` 自动释放，死进程的旧锁自动接管。这是进程间的君子协定，锁文件本身可以删。
+- **并发由锁守护**：两个会话同时驱动 Origin 会互相踩页面和句柄——现在第一个接入的桥持有 `%LOCALAPPDATA%\origin-bridge\session.lock`，后来的活桥会得到具名的 `origin_busy`（报出占用方 pid），持有方退出或 `origin_exit` 自动释放，死进程的旧锁经 rename 仲裁只有一个赢家接管。**读不出来/写一半的锁不再被当成死锁抢占**：报 `lock_unreadable` 并保持原样；锁目录不可写时报 `lock_unavailable`，宁可拒绝也不在无法确认独占时驱动 Origin（`ORIGIN_BRIDGE_LOCK_DIR` 可改目录）。这是进程间的君子协定，锁文件本身可以删。
 - 40 个图表预设只取元数据；预设自带的 `render_template()` 会先 `op.new()`——那会把用户正在编辑的工程整个丢掉，所以这里换成自己的渲染路径。
 
 ## 排障
@@ -309,7 +309,7 @@ Origin Bridge 的做法：
 | `connection_error` | Origin 是否 ≥2021；`pip show originpro`；任务管理器里 `Origin64.exe` 是否只有一个 |
 | 报"实例超过上限" | `origin_instances` 看有几个、哪些没窗口；`origin_reclaim` 关残留的后台实例；有窗口的那些要用户自己关（可能有未保存的东西） |
 | `import_empty` | 先 `origin_read_file` 看结构；空格/多行表头已由自研解析器处理，走到这个报错说明文件本身没有数值行 |
-| `com_timeout` | Origin 窗口是否卡在其他对话框或许可证弹窗；「正由另一个程序控制」的框桥会替你点掉并多给 15 秒宽限 |
+| `com_timeout` | Origin 窗口是否卡在其他对话框或许可证弹窗；「正由另一个程序控制」的框桥会替你点掉并多给 15 秒宽限。超时只结束**等待**：排队未开始的任务会被取消（`executed:"cancelled"`），已经在跑的任务报 `executed:"unknown"` 且**不会自动重放**——先 `origin_inspect` 确认真实状态，再决定要不要重做写操作 |
 | `无效指针` | 页面攒太多：`origin_close_pages`，或 `origin_exit` 让它重开 |
 | 图片没出来 | `origin_inspect` 看 `plots` 是否为 0；中文/空格/长路径实测可用，不用刻意改 ASCII |
 | 图是空的但没报错 | 看返回里的 `proof_level`；`plot_axis_degenerate` 会主动抛出 |
@@ -333,7 +333,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 424 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 473 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 

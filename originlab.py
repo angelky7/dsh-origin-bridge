@@ -11,6 +11,7 @@ forth is the most common source of silent failures.
 """
 
 import atexit
+import gc
 import json
 import math
 import os
@@ -96,7 +97,26 @@ _suspect = False
 _inflight = [None]    # box currently executing on the worker
 _abandoned = [None]   # a timed-out box that may still be running
 _thread_trace = {"attach": [], "reset": []}
+_release_stats = []
 _cancel_local = threading.local()
+
+
+def _com_object_count():
+    """originpro's live COM-wrapper counter, or None when it is not loaded.
+
+    BaseObject.__init__ increments it, __del__ decrements it. A reset that really
+    drops every wrapper leaves 0 here — the closest thing to a release proof
+    without hooking SWIG.
+    """
+    mod = sys.modules.get("originpro")
+    if mod is None:
+        return None
+    cfg = getattr(mod, "config", None) or sys.modules.get("originpro.config")
+    counter = getattr(cfg, "_OBJS_COUNT", None) if cfg is not None else None
+    try:
+        return int(counter[0])
+    except Exception:
+        return None
 
 
 def set_cancel_event(event):
@@ -296,9 +316,16 @@ def _dead_app(exc):
 
 
 def _reset_connection():
-    """Forget the cached originpro module and its dangling Application pointer."""
+    """Forget the cached originpro module and its dangling Application pointer.
+
+    Runs on the COM worker whenever the worker is free (call(), reclaim_safe,
+    exit). After dropping our references, collect on this thread so originpro's
+    wrapper __del__ (which decrements _OBJS_COUNT) runs here, next to the
+    attachment, and record the counter before/after for the release proof.
+    """
     global _op, _suspect
     _trace_thread("reset")
+    before = _com_object_count()      # before dropping our references
     _op = None
     _suspect = False
     # Page wrappers belong to the Origin process we just lost: keeping them would
@@ -314,6 +341,12 @@ def _reset_connection():
             po.__dict__["_app"] = None
         except Exception:
             return False
+    if before:
+        gc.collect()
+    after = _com_object_count()
+    _release_stats.append({"thread": threading.get_ident(),
+                           "before": before, "after": after})
+    del _release_stats[:-8]
     return True
 
 
@@ -1342,6 +1375,7 @@ def status():
             "paths": paths,
             "pro_hint": any("originpro" in str(v).lower() for v in paths.values() if v),
             "open_pages": _safe(lambda: [p.name for p in op.pages()], []),
+            "com_objects": _com_object_count(),
             "note": "pro_hint 只是从安装路径推断；Pro 能力以 origin_fit 能否跑通为准",
         }
 
@@ -2597,16 +2631,29 @@ def _exit_confirmed(pid, before):
     return "alive"
 
 
-def exit_origin(save_to=""):
+def exit_origin(save_to="", force=False):
     def run():
         global _op, _project_file
         # op.exit() is itself a COM call: with the busy box up it queues behind
         # the dialog and times out. Clear the box before touching COM.
         dismissed = _dismiss_all_busy_dialogs()
         op = origin()
-        saved = _save_project(save_to)["path"] if save_to else ""
         before = _process_rows()
         pid = _attached_pid(before)
+        row = next((r for r in before or [] if r["pid"] == pid), None) \
+            if pid is not None else None
+        if not (row and _row_owned(row)) and not force:
+            # The bridge may have attached to an Origin the user opened. Quitting
+            # it would discard unsaved work that has nothing to do with this chat.
+            raise OriginError(
+                "foreign_instance",
+                "当前 Origin 不是本桥启动的（pid %s%s），origin_exit 会把它整个退出，"
+                "可能丢掉未保存的工程" % (pid or "未知",
+                                          "，有窗口" if row and row.get("window") else ""),
+                ["确认要退出就再调 origin_exit(force=true)",
+                 "只想清残留实例用 origin_reclaim；有窗口的实例它不会动",
+                 "先把用户的工程 origin_save_project 存下来"])
+        saved = _save_project(save_to)["path"] if save_to else ""
         err = ""
         try:
             op.exit()

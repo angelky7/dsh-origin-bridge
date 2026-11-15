@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.18"
+SERVER_VERSION = "0.4.19"
 PROTOCOL = "2024-11-05"
 
 
@@ -282,12 +282,14 @@ TOOLS = [
     },
     {
         "name": "origin_exit",
-        "description": "关闭 Origin。默认不保存；给 save_to 会先存一份 .opju 再退。",
+        "description": "关闭 Origin。默认只退**本桥启动的**实例；如果连上的是用户自己开的 Origin，会报 foreign_instance，确认要关再加 force=true。默认不保存；给 save_to 会先存一份 .opju 再退。",
         "inputSchema": {
             "type": "object",
-            "properties": {"save_to": {"type": "string"}},
+            "properties": {"save_to": {"type": "string"},
+                           "force": {"type": "boolean", "default": False}},
         },
-        "run": lambda a: originlab.exit_origin(a.get("save_to", "")),
+        "run": lambda a: originlab.exit_origin(a.get("save_to", ""),
+                                               bool(a.get("force", False))),
     },
     {
         "name": "origin_instances",

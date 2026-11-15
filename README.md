@@ -41,11 +41,13 @@
 2. **不谎报成功。** 写操作要么读回证据，要么明确失败/降级；`unknown` 就说 `unknown`，绝不把"请求发出去了"当成"事情做成了"。
 3. **生命周期 fail-closed。** 会话锁、实例归属、退出、超时：拿不准就拒绝或如实报告，不猜、不静默重试写操作、不杀归属不明的进程。
 4. **不碰用户的东西。** 有窗口的 Origin 永远不动；只读文件不覆盖；测试数据与提示词不上传、不进包。
-5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 486 项离线/边界检查，任何人都能复跑。
+5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 493 项离线/边界检查，任何人都能复跑。
 
 **明确的非目标**：工具数量竞赛、云端渲染、改写 Origin 本身。单 COM worker 是当前的有意选择——除非实测证明它隔离不了，否则不引入多 worker 的复杂度。
 
-**取消语义（0.4.18）**：MCP 的 `notifications/cancelled` 会立即生效——排队中尚未开始的任务直接跳过并以 JSON-RPC `-32800` 答复；已经在 Origin 里执行的调用无法停止，会如实报 `executed:"unknown"`，并在 worker 空闲前拒绝新任务。COM 引用释放目前只有行为证据，没有析构线程证明；这一条写在发布稿的"已知限制"里。
+**取消语义（0.4.18）**：MCP 的 `notifications/cancelled` 会立即生效——排队中尚未开始的任务直接跳过并以 JSON-RPC `-32800` 答复；已经在 Origin 里执行的调用无法停止，会如实报 `executed:"unknown"`，并在 worker 空闲前拒绝新任务。
+
+**COM 释放（0.4.19，实测）**：重置时先清句柄表，再在 COM worker 上 `gc.collect()`，并读取 originpro 自己的包装器计数 `_OBJS_COUNT`。真机 import + 两图产生 **3 个包装器，重置后归零**，且收集线程就是附着所在的 worker——包装器的 `__del__` 及其持有的 SWIG 对象在同一条线程上释放。`po.Detach()` 只在解释器退出时触发，不在这条路径上。
 
 ## 为什么是它
 
@@ -54,7 +56,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1139 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1139 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 166、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **486 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 110、smoke 129、edge 39、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1139 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **1000+ 次真实测试，不是自称。** **1139 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1139 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 166、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **493 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 115、smoke 129、edge 41、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1139 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -145,17 +147,17 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 项，看到 ALL GOOD 才算过
-.\.venv\Scripts\python.exe edge_checks.py             # 39 项边界
+.\.venv\Scripts\python.exe edge_checks.py             # 41 项边界
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 15 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-.\.venv\Scripts\python.exe test_lifecycle.py          # 110 项，不需要 Origin：实例分类/归属回收/掉线重连/超时取消/退出核实/会话锁的安全边界
+.\.venv\Scripts\python.exe test_lifecycle.py          # 115 项，不需要 Origin：实例分类/归属回收/掉线重连/超时取消/退出核实/会话锁的安全边界
 .\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 项，不需要 Origin：返回值必须是严格 JSON
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 486 项随包发布，你可以自己复跑。另外那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 493 项随包发布，你可以自己复跑。另外那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -227,7 +229,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 | `origin_inspect` | 读回页面/图层/曲线数与已分配句柄——**改图前先看它，别猜索引** |
 | `origin_close_pages` | 清理攒下来的页面（长会话里这是"无效指针"的根因），支持 dry_run |
 | `origin_labtalk` | 逃生舱：原始 LabTalk + 强制读回 |
-| `origin_exit` | 关 Origin，可选先存盘 |
+| `origin_exit` | 关 Origin，可选先存盘；默认只退本桥启动的实例，连上的是用户自己开的 Origin 时报 `foreign_instance`，确认要关用 `force:true` |
 | `origin_instances` | 清点机器上的 Origin 实例：后台无窗口（客户端退出后的残留）vs 前台有窗口（可能是用户自己的项目），并标出哪些是本进程起的 |
 | `origin_reclaim` | 回收残留实例：默认**只关本桥能证明是自己启动的**（本会话记录，或上次运行留下的 pid+启动时间记录），且只关没有窗口的；归属不明的无窗口实例只在 `unowned` 里报告，确认可用 `include_orphans:true` 才关；有窗口的一律不动。强杀后会核实进程确实退出，没退报 `stuck`。`close_background:false` 只看不动手 |
 | `origin_figure` | 主路径：导入→画图→轴标题→图例→图片+opju 一次完成 |
@@ -326,6 +328,7 @@ Origin Bridge 的做法：
 | 报"实例超过上限" | `origin_instances` 看有几个、哪些没窗口；`origin_reclaim` 关残留的后台实例；有窗口的那些要用户自己关（可能有未保存的东西） |
 | `import_empty` | 先 `origin_read_file` 看结构；空格/多行表头已由自研解析器处理，走到这个报错说明文件本身没有数值行 |
 | `com_timeout` | Origin 窗口是否卡在其他对话框或许可证弹窗；「正由另一个程序控制」的框桥会替你点掉并多给 15 秒宽限。超时只结束**等待**：排队未开始的任务会被取消（`executed:"cancelled"`），已经在跑的任务报 `executed:"unknown"` 且**不会自动重放**——先 `origin_inspect` 确认真实状态，再决定要不要重做写操作。客户端主动取消（`notifications/cancelled`）走同一套语义，并以 JSON-RPC `-32800` 答复 |
+| `foreign_instance` | 当前连着的 Origin 不是本桥启动的（可能是你手动开的工程）。确认要关就 `origin_exit(force=true)`；否则先 `origin_save_project`，或只关残留实例用 `origin_reclaim` |
 | `无效指针` | 页面攒太多：`origin_close_pages`，或 `origin_exit` 让它重开 |
 | 图片没出来 | `origin_inspect` 看 `plots` 是否为 0；中文/空格/长路径实测可用，不用刻意改 ASCII |
 | 图是空的但没报错 | 看返回里的 `proof_level`；`plot_axis_degenerate` 会主动抛出 |
@@ -349,7 +352,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 486 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 493 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 

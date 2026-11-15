@@ -263,6 +263,42 @@ def main():
 
     rpc.close()
 
+    # 9d) COM wrapper release proof: attach from this process, create page
+    # wrappers, detach on the COM worker, then read originpro's own counter.
+    # before > 0 and after == 0 means the wrappers really were collected (their
+    # __del__ ran) — not just dropped from our handle table.
+    OL = S.originlab
+    try:
+        OL._session_lock_release()          # the dead server's lock: no-op or stale
+    except Exception:
+        pass
+    try:
+        OL.call(lambda: OL.origin().path(), timeout=180)
+        imp = OL.import_file(os.path.join(HERE, "sample.dat"))
+        OL.plot(imp["worksheet"], 1, 2)
+        OL.plot(imp["worksheet"], 1, 2)
+        before = OL._com_object_count()
+        OL.call(OL._reset_connection, timeout=30)
+        after = OL._com_object_count()
+        stats = list(OL._release_stats)
+        check("reset collects every COM page wrapper",
+              isinstance(before, int) and before > 0 and after == 0,
+              (before, after, stats[-1:] if stats else []))
+        check("the collecting reset ran on the COM worker",
+              bool(stats) and stats[-1].get("thread") == OL._thread.ident,
+              stats[-1:] if stats else [])
+    finally:
+        # This harness attached to an instance it did not start, so cleanup is
+        # explicit and forced; verify it is gone before the teardown test below.
+        try:
+            OL.exit_origin(force=True)
+        except Exception as exc:
+            check("release-probe cleanup exit", False, repr(exc)[:120])
+            try:
+                OL.reclaim(include_orphans=True)
+            except Exception:
+                pass
+
     # 10) the node launcher shipped in bin/ must actually start the server
     node = shutil.which("node")
     if node:

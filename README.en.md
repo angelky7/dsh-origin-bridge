@@ -33,11 +33,13 @@ Not "the Origin MCP with the most tools" — the one you can trust on real lab d
 2. **Never report success it cannot prove.** A write either reads evidence back or fails/degrades honestly; `unknown` stays `unknown`. "The request was sent" is never treated as "the thing was done".
 3. **Fail closed on lifecycle.** Session lock, instance ownership, exit, timeouts: when in doubt, refuse or report — never guess, never silently replay a write, never kill an instance whose ownership is unproven.
 4. **Never touch what is the user's.** A windowed Origin is never killed; read-only files are never overwritten; test data and prompts are never uploaded or shipped.
-5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and 486 offline/edge checks ship inside the package for anyone to re-run.
+5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and 493 offline/edge checks ship inside the package for anyone to re-run.
 
 **Explicit non-goals:** a tool-count race, cloud rendering, rewriting Origin itself. A single COM worker is a deliberate choice — no multi-worker complexity unless measurement proves COM cannot be isolated.
 
-**Cancellation semantics (0.4.18):** MCP `notifications/cancelled` takes effect immediately — a queued task that has not started is skipped and answered with JSON-RPC `-32800`; a call already inside Origin cannot be stopped and is reported as `executed:"unknown"`, with new calls refused until the worker frees up. COM reference release still has behavioural evidence only, not a destructor-thread proof; that stays under "Known limits" in the release notes.
+**Cancellation semantics (0.4.18):** MCP `notifications/cancelled` takes effect immediately — a queued task that has not started is skipped and answered with JSON-RPC `-32800`; a call already inside Origin cannot be stopped and is reported as `executed:"unknown"`, with new calls refused until the worker frees up.
+
+**COM release (0.4.19, measured):** a reset clears the handle table, then runs `gc.collect()` on the COM worker and reads originpro's own wrapper counter `_OBJS_COUNT`. On real hardware, import + two plots produced **3 wrappers; after the reset the counter was 0**, and the collecting thread was the worker that attached — the wrappers' `__del__` and the SWIG objects they hold were released on that thread. `po.Detach()` only runs at interpreter exit and is not on this path.
 
 ## Why
 
@@ -46,7 +48,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **1000+ real tests, not a claim.** 1139 full-chain cases run against a real stdio server + local OriginPro — 1139 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 166, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **486** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 110, smoke 129, edge 39, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1139-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
+- **1000+ real tests, not a claim.** 1139 full-chain cases run against a real stdio server + local OriginPro — 1139 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 166, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **493** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 115, smoke 129, edge 41, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1139-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
 
 ## What it can do
 
@@ -126,10 +128,10 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 checks, needs Origin
-.\.venv\Scripts\python.exe edge_checks.py             # 39 checks, needs Origin
+.\.venv\Scripts\python.exe edge_checks.py             # 41 checks, needs Origin
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 checks, Origin-free
 .\.venv\Scripts\python.exe test_binio.py              # 15 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
-.\.venv\Scripts\python.exe test_lifecycle.py          # 110 checks, Origin-free
+.\.venv\Scripts\python.exe test_lifecycle.py          # 115 checks, Origin-free
 .\.venv\Scripts\python.exe test_paths.py              # 35 checks, Origin-free
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free
@@ -166,7 +168,7 @@ For dsh registration from a source checkout, run `install_dsh.ps1` (backs up you
 | `origin_inspect` | Pages / layers / plot counts / live handles — **look before you guess indices** |
 | `origin_close_pages` | Clean up accumulated pages (the root cause of stale pointers in long sessions); has `dry_run` |
 | `origin_labtalk` | Escape hatch: raw LabTalk with mandatory read-back; a deny list blocks destructive statements (advisory, not a sandbox) |
-| `origin_exit` | Quit Origin, optionally saving first |
+| `origin_exit` | Quit Origin, optionally saving first; by default only instances this bridge started — an Origin the user opened is refused with `foreign_instance`, and `force:true` overrides it |
 | `origin_instances` | List Origin instances: windowless background leftovers vs foreground windows, marking which this process started |
 | `origin_reclaim` | Reclaim leftovers — **only instances this bridge can prove it started** (this session, or a recorded pid + process start time from an earlier run), and windowless only; unknown-ownership windowless instances are reported in `unowned` and need explicit `include_orphans:true`; anything with a window is listed for you to close yourself. A forced kill is confirmed against the process table; a survivor is reported as `stuck` |
 | `origin_figure` | Main path: import → plot → titles → legend → image + opju in one call |
@@ -198,6 +200,7 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 | "Instance limit exceeded" | `origin_instances` to see them, `origin_reclaim` to close windowless leftovers; windows with titles may be your own unsaved work |
 | `import_empty` | `origin_read_file` first; space-aligned and multi-header files are handled, so this means the file truly has no numeric rows |
 | `com_timeout` | Origin stuck on some other dialog / license popup; the "being controlled by another program" box is dismissed by the bridge itself, plus a 15 s grace window. A timeout ends the **wait** only: a queued task that never started is cancelled (`executed:"cancelled"`), an in-flight one is reported as `executed:"unknown"` and is **never replayed** — inspect the real state before redoing a write |
+| `foreign_instance` | The attached Origin was not started by this bridge (likely a project you opened yourself). Use `origin_exit(force=true)` if you really want it closed; otherwise `origin_save_project` first, or use `origin_reclaim` for leftovers only |
 | Image missing | `origin_inspect` → `plots` count; Chinese/space/long paths are verified, no need to ASCII-fy |
 | `bad_path` / `target_locked` | The path is wrong (directory as filename, unmapped drive) or the target exists read-only; the bridge will not overwrite |
 | `origin_busy` | Another bridge session holds Origin (lock at `%LOCALAPPDATA%\origin-bridge\session.lock`). Wait for it, or delete the lock file if it is wedged |

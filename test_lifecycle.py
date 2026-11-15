@@ -421,6 +421,59 @@ _exit_case("gone", True, "退出报错但进程已退出", True)
 _exit_case("alive", False, "进程没退", False, "exit_unconfirmed")
 _exit_case("alive", True, "进程没退且 op.exit 报错", False, "exit_unconfirmed")
 
+print("exit_origin 默认不退出别人启动的 Origin")
+
+
+def _exit_foreign(force, expect_ok):
+    tmp = tempfile.mkdtemp(prefix="origin_bridge_foreign_")
+    saved = (originlab.origin, originlab._save_project, originlab._process_rows,
+             originlab._wait_pid_gone, originlab._dismiss_all_busy_dialogs,
+             set(originlab._started_pids),
+             originlab._SESSION_DIR, originlab._SESSION_LOCK)
+    calls = []
+    state = {"exited": False}
+    fake = _FakeOp(False)
+    real_exit = fake.exit
+    fake.exit = lambda: (calls.append("exit"), state.__setitem__("exited", True),
+                         real_exit())[2]
+    originlab._SESSION_DIR = tmp
+    originlab._SESSION_LOCK = os.path.join(tmp, "session.lock")
+    originlab._started_pids.clear()             # attached to a pre-existing instance
+    originlab._session_lock_acquire()
+    originlab.origin = lambda: fake
+    originlab._save_project = lambda p: {"path": ""}
+    originlab._process_rows = lambda: ([] if state["exited"] else
+                                      [{"pid": 7777, "started": "T0", "window": 0}])
+    originlab._wait_pid_gone = lambda pid, started="", timeout=5.0: "gone"
+    originlab._dismiss_all_busy_dialogs = lambda: []
+    try:
+        try:
+            out = originlab.exit_origin(force=force)
+            ok, got = True, out
+        except originlab.OriginError as exc:
+            ok, got = False, exc
+        if expect_ok:
+            check("force=true 时退出外部实例", ok and got.get("exited") is True, got)
+            check("force=true 确实调了 op.exit", calls == ["exit"], calls)
+        else:
+            check("外部实例默认拒绝退出", (not ok) and got.code == "foreign_instance", got)
+            check("拒绝时不碰 op.exit", calls == [], calls)
+            check("拒绝时锁仍由本会话持有",
+                  os.path.exists(originlab._SESSION_LOCK), originlab._SESSION_LOCK)
+    finally:
+        (originlab.origin, originlab._save_project, originlab._process_rows,
+         originlab._wait_pid_gone, originlab._dismiss_all_busy_dialogs) = (
+            saved[0], saved[1], saved[2], saved[3], saved[4])
+        originlab._started_pids.clear()
+        originlab._started_pids.update(saved[5])
+        originlab._SESSION_DIR = saved[6]
+        originlab._SESSION_LOCK = saved[7]
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+_exit_foreign(False, False)
+_exit_foreign(True, True)
+
 print("掉线重连（call 层）")
 _real_reset = originlab._reset_connection
 

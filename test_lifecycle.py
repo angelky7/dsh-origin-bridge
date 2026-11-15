@@ -535,6 +535,83 @@ def _queued_not_started():
 
 
 _queued_not_started()
+
+print("MCP 取消：排队任务与执行中任务")
+
+
+def _cancel_queued():
+    ran = []
+    ev = _threading.Event()
+
+    def blocker():
+        _time.sleep(1.5)
+        return "blocked"
+
+    t = _threading.Thread(target=lambda: originlab.call(blocker, timeout=10))
+    t.start()
+    _time.sleep(0.2)
+    originlab.set_cancel_event(ev)
+    ev.set()                      # what the server's reader does on the notification
+    t0 = _time.time()
+    try:
+        originlab.call(lambda: ran.append(1) or "victim", timeout=10)
+        check("排队任务可被取消", False, "本该取消")
+    except originlab.OriginError as exc:
+        check("排队任务报 cancelled", exc.code == "cancelled", exc.code)
+        check("排队取消说明未执行", exc.extra.get("executed") in ("cancelled", "queued"),
+              exc.extra)
+        check("排队取消立即返回（不等 10 秒）", _time.time() - t0 < 3, _time.time() - t0)
+    finally:
+        originlab.set_cancel_event(None)
+        t.join()
+    _time.sleep(0.4)
+    check("被取消的排队任务没有执行", ran == [], ran)
+
+
+_cancel_queued()
+
+
+def _cancel_inflight():
+    ev = _threading.Event()
+    ran = []
+    setter = _threading.Thread(target=lambda: (_time.sleep(0.25), ev.set()))
+    setter.start()
+    originlab.set_cancel_event(ev)
+    t0 = _time.time()
+
+    def slow():
+        _time.sleep(1.2)
+        ran.append(1)
+        return "late"
+
+    try:
+        originlab.call(slow, timeout=10)
+        check("执行中任务可被取消", False, "本该取消")
+    except originlab.OriginError as exc:
+        check("执行中任务报 cancelled", exc.code == "cancelled", exc.code)
+        check("执行中取消如实报 unknown", exc.extra.get("executed") == "unknown", exc.extra)
+        check("取消立即返回（不等慢任务结束）", _time.time() - t0 < 1.0, _time.time() - t0)
+    finally:
+        originlab.set_cancel_event(None)
+        setter.join()
+    _time.sleep(1.4)
+    check("无法停止的执行中任务仍会跑完（已如实告知）", ran == [1], ran)
+    check("worker 空闲后恢复", originlab.call(lambda: "ok") == "ok")
+
+
+_cancel_inflight()
+
+
+def _cancel_event_cleared():
+    ev = _threading.Event()
+    ev.set()
+    originlab.set_cancel_event(ev)
+    originlab.set_cancel_event(None)
+    check("清掉取消事件后 call 不受影响", originlab.call(lambda: 42) == 42)
+
+
+_cancel_event_cleared()
+
 print("server 工具注册")
 import server  # noqa: E402
 

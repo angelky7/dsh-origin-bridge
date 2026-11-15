@@ -1,11 +1,15 @@
 """origin-bridge MCP server.
 
-Deliberately a synchronous, newline-delimited JSON-RPC loop over stdio instead
-of the official `mcp` SDK's asyncio transport: on Windows the SDK builds an
-asyncio ProactorEventLoop, whose self-pipe falls back to a loopback
+Deliberately a newline-delimited JSON-RPC loop over stdio instead of the official
+`mcp` SDK's asyncio transport: on Windows the SDK builds an asyncio
+ProactorEventLoop, whose self-pipe falls back to a loopback
 socketpair() (127.0.0.1 listen+connect+accept). Host firewalls that block
 loopback accepts make that hang forever, the MCP handshake never completes, and
 the client stalls for its full 60s request timeout before giving up.
+
+One reader thread parses stdin so that notifications/cancelled can be honored
+while a tool runs; tools themselves still execute one at a time on the main
+thread (the engine has one COM worker and global handle state).
 
 Usage:  python server.py            # stdio, for dsh / any MCP client
         python server.py --tools   # print the tool table and exit
@@ -13,14 +17,16 @@ Usage:  python server.py            # stdio, for dsh / any MCP client
 
 import json
 import os
+import queue
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.17"
+SERVER_VERSION = "0.4.18"
 PROTOCOL = "2024-11-05"
 
 
@@ -621,6 +627,25 @@ def _handle(msg):
     return None
 
 
+def _encode_reply(reply):
+    """Strict JSON, with a clean JSON-RPC error if a value slipped through.
+
+    allow_nan=False is the last line of defence. A bare Infinity/NaN in a reply
+    is not valid JSON, so a strict client (dsh) fails to parse the *entire*
+    result rather than one field. Answer with a clean error instead of either
+    killing the session or writing bytes no client can read.
+    """
+    try:
+        line = json.dumps(reply, ensure_ascii=False, default=str, allow_nan=False)
+    except ValueError as exc:
+        _log("reply was not strict JSON (%r) for id=%r" % (exc, reply.get("id")))
+        reply = {"jsonrpc": "2.0", "id": reply.get("id"),
+                 "error": {"code": -32603,
+                           "message": "internal error: 返回值含非 JSON 数值（%s）" % exc}}
+        line = json.dumps(reply, ensure_ascii=False, default=str)
+    return (line + "\n").encode("utf-8")
+
+
 def main():
     if "--tools" in sys.argv:
         for t in TOOLS:
@@ -635,61 +660,136 @@ def main():
     max_line = int(os.environ.get("ORIGIN_BRIDGE_MAX_LINE", 64 * 1024 * 1024))
     _log("ready; python=%s | max line %d" % (sys.executable, max_line))
 
+    # Warm up numpy BEFORE the reader thread exists. On this Windows/CPython
+    # build, the first import of numpy's C extension deadlocks in the DLL load
+    # when another thread is parked in a blocking stdin read; the COM worker
+    # imports originpro (which imports numpy) later. Measured: without this,
+    # the worker never leaves _multiarray_umath.create_module.
+    try:
+        import numpy  # noqa: F401
+    except Exception:
+        pass
+
+    inbox = queue.Queue()
+    pending = {}            # tools/call id -> cancellation Event
+    cancelled = set()       # ids whose cancellation arrived
+    pending_lock = threading.Lock()
+    write_lock = threading.Lock()
+
+    def send(reply):
+        if reply is None:
+            return
+        data = _encode_reply(reply)
+        try:
+            with write_lock:
+                stdout.write(data)
+                stdout.flush()
+        except OSError:
+            # The client closed the pipe; there is nowhere to deliver the answer.
+            pass
+
+    def request_key(value):
+        # JSON-RPC ids are strings or numbers; anything else is malformed and
+        # must not be used as a dict key (a list/dict id would raise).
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            return None
+        return value
+
+    def reader():
+        while True:
+            raw = stdin.readline(max_line + 1)
+            if not raw:
+                inbox.put({"__eof__": True})
+                return
+            if len(raw) > max_line and not raw.endswith(b"\n"):
+                # Drain the rest of the oversized line so the next request is not
+                # read from the middle of this one, then answer with a clean error.
+                while True:
+                    chunk = stdin.readline(max_line + 1)
+                    if not chunk or chunk.endswith(b"\n"):
+                        break
+                _log("request over %d bytes refused" % max_line)
+                inbox.put({"__reply__": {"jsonrpc": "2.0", "id": None,
+                                          "error": {"code": -32600,
+                                                    "message": "请求太大：单行上限 %d 字节"
+                                                               % max_line}}})
+                continue
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                msg = json.loads(raw.decode("utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                _log("bad json: %s" % exc)
+                inbox.put({"__reply__": {"jsonrpc": "2.0", "id": None,
+                                          "error": {"code": -32700,
+                                                    "message": "parse error"}}})
+                continue
+            if isinstance(msg, dict) and msg.get("method") == "notifications/cancelled":
+                # Handled here, not on the executor: this is the only message that
+                # must take effect while a tool is blocking the main thread.
+                key = request_key((msg.get("params") or {}).get("requestId"))
+                with pending_lock:
+                    ev = pending.get(key) if key is not None else None
+                    if ev is not None:
+                        cancelled.add(key)
+                if ev is not None:
+                    _log("cancel request id=%r" % (key,))
+                    ev.set()
+                continue
+            if isinstance(msg, dict) and msg.get("method") == "tools/call":
+                key = request_key(msg.get("id"))
+                if key is not None:
+                    ev = threading.Event()
+                    with pending_lock:
+                        pending[key] = ev
+                    msg["__cancel__"] = ev
+            inbox.put(msg)
+
+    threading.Thread(target=reader, daemon=True, name="stdin-reader").start()
+
     while True:
-        raw = stdin.readline(max_line + 1)
-        if not raw:
+        item = inbox.get()
+        if not isinstance(item, dict):
+            send(_handle(item))
+            continue
+        if item.get("__eof__"):
             _log("stdin closed; exiting")
             return 0
-        if len(raw) > max_line and not raw.endswith(b"\n"):
-            # Drain the rest of the oversized line so the next request is not read
-            # from the middle of this one, then answer with a clean error.
-            while True:
-                chunk = stdin.readline(max_line + 1)
-                if not chunk or chunk.endswith(b"\n"):
-                    break
-            _log("request over %d bytes refused" % max_line)
-            stdout.write((json.dumps({"jsonrpc": "2.0", "id": None,
-                                      "error": {"code": -32600,
-                                                "message": "请求太大：单行上限 %d 字节" % max_line}},
-                                     ensure_ascii=False) + "\n").encode("utf-8"))
-            stdout.flush()
+        if "__reply__" in item:
+            send(item["__reply__"])
             continue
-        raw = raw.strip()
-        if not raw:
-            continue
+        ev = item.pop("__cancel__", None)
+        rid = item.get("id")
         try:
-            msg = json.loads(raw.decode("utf-8"))
-        except Exception as exc:  # noqa: BLE001
-            _log("bad json: %s" % exc)
-            reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
-        else:
+            if ev is not None:
+                originlab.set_cancel_event(ev)
             # A single message must never take the server down: dsh only spawns
             # this process once per session, so dying here means every origin
             # tool is dead until the user restarts the harness.
-            try:
-                reply = _handle(msg)
-            except Exception as exc:  # noqa: BLE001
-                _log("handler crashed on %r: %r" % (
-                    msg.get("method") if isinstance(msg, dict) else type(msg).__name__, exc))
-                reply = {"jsonrpc": "2.0", "id": msg.get("id") if isinstance(msg, dict) else None,
-                         "error": {"code": -32603, "message": "internal error: %s" % exc}}
-        if reply is None:
-            continue
-        # allow_nan=False is the last line of defence. A bare Infinity/NaN in a
-        # reply is not valid JSON, so a strict client (dsh) fails to parse the
-        # *entire* result rather than one field. If anything still slips through,
-        # answer with a clean JSON-RPC error instead of either killing the session
-        # or writing bytes no client can read.
-        try:
-            line = json.dumps(reply, ensure_ascii=False, default=str, allow_nan=False)
-        except ValueError as exc:
-            _log("reply was not strict JSON (%r) for id=%r" % (exc, reply.get("id")))
-            reply = {"jsonrpc": "2.0", "id": reply.get("id"),
-                     "error": {"code": -32603,
-                               "message": "internal error: 返回值含非 JSON 数值（%s）" % exc}}
-            line = json.dumps(reply, ensure_ascii=False, default=str)
-        stdout.write((line + "\n").encode("utf-8"))
-        stdout.flush()
+            reply = _handle(item)
+        except Exception as exc:  # noqa: BLE001
+            _log("handler crashed on %r: %r" % (
+                item.get("method") if isinstance(item, dict) else type(item).__name__, exc))
+            reply = {"jsonrpc": "2.0", "id": rid,
+                     "error": {"code": -32603, "message": "internal error: %s" % exc}}
+        finally:
+            if ev is not None:
+                originlab.set_cancel_event(None)
+                key = request_key(rid)
+                with pending_lock:
+                    pending.pop(key, None)
+                    was_cancelled = key in cancelled
+                    cancelled.discard(key)
+            else:
+                was_cancelled = False
+        if was_cancelled:
+            # The client asked to stop; whatever the engine produced is discarded
+            # (a write may still have landed — the engine reports that state in
+            # its own error, but the MCP answer is the cancellation).
+            reply = {"jsonrpc": "2.0", "id": rid,
+                     "error": {"code": -32800, "message": "request cancelled"}}
+        send(reply)
 
 
 if __name__ == "__main__":

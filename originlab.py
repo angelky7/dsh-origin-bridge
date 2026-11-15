@@ -96,6 +96,16 @@ _suspect = False
 _inflight = [None]    # box currently executing on the worker
 _abandoned = [None]   # a timed-out box that may still be running
 _thread_trace = {"attach": [], "reset": []}
+_cancel_local = threading.local()
+
+
+def set_cancel_event(event):
+    """Server hook: the cancellation event of the request running on this thread.
+
+    None clears it. call() polls this event while waiting on the COM worker, so
+    a queued task can be skipped instead of executing after the client gave up.
+    """
+    _cancel_local.event = event
 
 
 def _trace_thread(kind):
@@ -152,15 +162,21 @@ def _dismiss_own_busy_dialogs():
     return dismissed
 
 
-def call(fn, *args, timeout=240, retry_safe=False, **kwargs):
+def call(fn, *args, timeout=240, retry_safe=False, cancel=None, **kwargs):
     """Run fn on the COM worker thread.
 
     retry_safe must only be set for functions that are safe to run twice (pure
     reads). A dead COM pointer used to replay every call once, including
     origin_write/origin_plot — the model then saw a timeout, retried, and the
     side effect had already been performed twice.
+
+    cancel is an optional threading.Event (the server passes the MCP
+    request-cancelled event via set_cancel_event). A queued task is skipped when
+    the event fires; a task already inside Origin cannot be stopped and is
+    reported as executed="unknown".
     """
     global _thread, _suspect
+    ev = cancel if cancel is not None else getattr(_cancel_local, "event", None)
     with _thread_lock:
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_worker, daemon=True, name="origin-com")
@@ -184,7 +200,30 @@ def call(fn, *args, timeout=240, retry_safe=False, **kwargs):
     for attempt in (0, 1):
         box = {"done": threading.Event(), "cancel": threading.Event(), "started": False}
         _q.put((fn, args, kwargs, box))
-        if not box["done"].wait(timeout):
+        deadline = time.time() + timeout
+        while not box["done"].wait(0.2):
+            if ev is not None and ev.is_set():
+                # Client gave up. If the worker has not picked the task up it will
+                # skip it; if it is already inside Origin, this call reports the
+                # truth and blocks new work until the worker frees up.
+                box["cancel"].set()
+                if box.get("started"):
+                    _abandoned[0] = box
+                    state = "unknown"
+                    hint = "取消到达时任务已经在 Origin 里执行，结果未知"
+                else:
+                    box["done"].wait(1.0)   # let the worker skip it
+                    state = "cancelled" if box["done"].is_set() else "queued"
+                    hint = ("任务还没开始，已取消" if state == "cancelled"
+                            else "取消标记已设下，排到队头时任务会被跳过")
+                raise OriginError(
+                    "cancelled",
+                    "请求被 MCP 客户端取消；%s" % hint,
+                    ["用 origin_inspect 确认真实状态，再决定要不要重做"],
+                    executed=state)
+            if time.time() >= deadline:
+                break
+        if not box["done"].is_set():
             # The likeliest non-crash block is the "正由另一个程序控制" message box:
             # someone asked Origin to close while a client holds COM. It is our hold
             # as often as not, so click the box and give the queued call a grace

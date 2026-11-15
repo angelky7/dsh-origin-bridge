@@ -33,11 +33,11 @@ Not "the Origin MCP with the most tools" — the one you can trust on real lab d
 2. **Never report success it cannot prove.** A write either reads evidence back or fails/degrades honestly; `unknown` stays `unknown`. "The request was sent" is never treated as "the thing was done".
 3. **Fail closed on lifecycle.** Session lock, instance ownership, exit, timeouts: when in doubt, refuse or report — never guess, never silently replay a write, never kill an instance whose ownership is unproven.
 4. **Never touch what is the user's.** A windowed Origin is never killed; read-only files are never overwritten; test data and prompts are never uploaded or shipped.
-5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and 473 offline/edge checks ship inside the package for anyone to re-run.
+5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and 486 offline/edge checks ship inside the package for anyone to re-run.
 
 **Explicit non-goals:** a tool-count race, cloud rendering, rewriting Origin itself. A single COM worker is a deliberate choice — no multi-worker complexity unless measurement proves COM cannot be isolated.
 
-**Known edges in 0.4.17:** an in-flight COM call cannot be cancelled by MCP (queued ones can), and COM reference release has behavioural evidence only, not a destructor-thread proof. Both are listed under "Known limits" in the release notes, not counted as done.
+**Cancellation semantics (0.4.18):** MCP `notifications/cancelled` takes effect immediately — a queued task that has not started is skipped and answered with JSON-RPC `-32800`; a call already inside Origin cannot be stopped and is reported as `executed:"unknown"`, with new calls refused until the worker frees up. COM reference release still has behavioural evidence only, not a destructor-thread proof; that stays under "Known limits" in the release notes.
 
 ## Why
 
@@ -46,7 +46,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **1000+ real tests, not a claim.** 1139 full-chain cases run against a real stdio server + local OriginPro — 1139 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 166, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **473** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 100, smoke 129, edge 36, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1139-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
+- **1000+ real tests, not a claim.** 1139 full-chain cases run against a real stdio server + local OriginPro — 1139 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 166, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **486** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 110, smoke 129, edge 39, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1139-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
 
 ## What it can do
 
@@ -126,10 +126,10 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 checks, needs Origin
-.\.venv\Scripts\python.exe edge_checks.py             # 36 checks, needs Origin
+.\.venv\Scripts\python.exe edge_checks.py             # 39 checks, needs Origin
 .\.venv\Scripts\python.exe test_asciiio.py            # 84 checks, Origin-free
 .\.venv\Scripts\python.exe test_binio.py              # 15 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
-.\.venv\Scripts\python.exe test_lifecycle.py          # 100 checks, Origin-free
+.\.venv\Scripts\python.exe test_lifecycle.py          # 110 checks, Origin-free
 .\.venv\Scripts\python.exe test_paths.py              # 35 checks, Origin-free
 .\.venv\Scripts\python.exe test_json_safety.py        # 29 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free
@@ -185,6 +185,8 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 - Long sessions accumulate pages; past ~200 the per-plot cost grows (0.7 s → 2.8 s at 300 pages). The engine warns every 50 new pages and `origin_close_pages` / `origin_exit` reset the counter.
 - A windowless Origin is the *normal* state for a dsh-driven instance, so nothing ever kills instances implicitly: `origin_reclaim` acts only on windowless instances it can prove it started (pid + process start time), and only when you call it. Unknown-ownership windowless instances are reported, never silently killed.
 - A close attempt while Origin is under automation pops the modal "being controlled by another program" box, and every COM call queues behind it until someone clicks OK. The bridge matches that box **by body text** — dismissed automatically on the timeout path (with a grace window), swept after each call for instances it spawned, reported per-instance by `origin_instances`, and cleared before `origin_reclaim`/`origin_exit` act. Every other dialog (save prompts, license) is reported but never clicked.
+- **Cancellation is handled by the server, not the executor**: MCP `notifications/cancelled` is processed by the stdin reader and sets the cancellation event immediately. A queued task that has not started is skipped and answered with JSON-RPC `-32800`; a COM call already inside Origin cannot be stopped, reports `executed:"unknown"`, and new work is refused until the worker frees up.
+- **numpy's first load deadlocks on Windows** if another thread is parked in a blocking stdin read: the worker's first `import originpro` hangs inside `_multiarray_umath`'s DLL load (reproduced). The server imports numpy before starting the reader thread to avoid it.
 - Statistics (t-test / ANOVA / PCA / survival) are not provided — `originpro` doesn't offer them either.
 
 ## Troubleshooting

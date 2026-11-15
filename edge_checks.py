@@ -211,6 +211,56 @@ def main():
     check("matrix 3-value xy_range -> bad_arguments",
           bad.get("code") == "bad_arguments", (bad.get("code"), str(bad.get("message"))[:60]))
 
+    # 9c) MCP cancellation end-to-end: a tools/call queued behind a slow one is
+    # cancelled by notifications/cancelled and answered with -32800, and the
+    # bridge serves normally afterwards.
+    def send_call(cid, name, args):
+        rpc.p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": cid, "method": "tools/call",
+                                      "params": {"name": name, "arguments": args}}) + "\n")
+        rpc.p.stdin.flush()
+
+    def wait_reply(cid, timeout=40):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            with rpc.lock:
+                for raw in rpc.lines:
+                    try:
+                        msg = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if msg.get("id") == cid:
+                        return msg
+            time.sleep(0.05)
+        return None
+
+    slow_id = rpc.id + 1
+    rpc.id = slow_id
+    send_call(slow_id, "origin_labtalk", {"script": "sec -p 3"})
+    time.sleep(0.2)
+    queued_id = rpc.id + 1
+    rpc.id = queued_id
+    send_call(queued_id, "origin_status", {})
+    time.sleep(0.1)
+    rpc.notify("notifications/cancelled", {"requestId": queued_id})
+    cancelled_reply = wait_reply(queued_id)
+    check("queued call cancelled -> -32800",
+          isinstance(cancelled_reply, dict)
+          and (cancelled_reply.get("error") or {}).get("code") == -32800,
+          cancelled_reply)
+    slow_reply = wait_reply(slow_id, timeout=60)
+    check("the blocking call still returns a result",
+          isinstance(slow_reply, dict) and "result" in slow_reply, slow_reply)
+    recovered = None
+    t0 = time.time()
+    while time.time() - t0 < 25:
+        st = rpc.tool("origin_status", {}, timeout=30)
+        if st.get("code") != "origin_busy":
+            recovered = st
+            break
+        time.sleep(1)
+    check("bridge serves again after a cancellation",
+          recovered is not None and recovered.get("connected") is True, recovered)
+
     rpc.close()
 
     # 10) the node launcher shipped in bin/ must actually start the server

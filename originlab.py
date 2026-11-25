@@ -358,7 +358,7 @@ def mark_suspect():
 
 def origin():
     """Import originpro and force the COM connection (launches Origin if needed)."""
-    global _op
+    global _op, _ownership_uncertain
     if _op is not None:
         return _op
     try:
@@ -398,7 +398,16 @@ def origin():
         )
     existing = {row["pid"] for row in before} if before is not None else set()
     after = _process_rows()
-    if after is not None:
+    if before is None:
+        # Fail closed on ownership. The pre-connect probe timed out or powershell
+        # was blocked (AV, cold spawn), so we cannot tell "started by us" from "the
+        # user's own Origin". Recording everything as ours is the dangerous direction:
+        # measured by stubbing _process_rows (None first, then the user's windowed
+        # pid), the user's instance landed in _started_pids AND owned.json, after
+        # which origin_exit no longer refused with foreign_instance and force-less
+        # reclaim would close it.
+        _ownership_uncertain = True
+    elif after is not None:
         # Forget instances that died while we were not looking (user closed
         # Origin, crash): a stale pid would otherwise make _attached_pid()
         # ambiguous on the next exit.
@@ -415,6 +424,12 @@ def origin():
 
 ORIGIN_EXE = "Origin64.exe"
 _started_pids = set()   # instances that appeared because WE connected
+# True when the pre-connect process probe failed, so "which Origin instances existed
+# before us" is unknown. Ownership must then not be claimed at all: the fallback
+# `existing = set()` made EVERY instance on the machine look like one we started,
+# which hands origin_exit the right to quit the user's own project (and lets
+# reclaim kill their background script instance).
+_ownership_uncertain = False
 
 
 # Ownership on disk: a bridge that crashes leaves its Origin running, and the
@@ -676,7 +691,11 @@ def instances():
     return sanitize({"count": len(rows), "probe": "ok",
                      "background": [r for r in rows if not r["foreground"]],
                      "foreground": [r for r in rows if r["foreground"]],
-                     "started_by_us": sorted(_started_pids)})
+                     "started_by_us": sorted(_started_pids),
+                     "ownership": "uncertain" if _ownership_uncertain else "ok",
+                     "ownership_note": (
+                         "连接前的进程探测失败过，本会话不认领任何实例（避免误关你自己开的 Origin）："
+                         "ours 只反映磁盘上 pid+启动时间的历史记录" if _ownership_uncertain else "")})
 
 
 def reclaim(close_background=True, include_orphans=False, _detach=True):
@@ -1133,6 +1152,14 @@ def sanitize(obj):
     if isinstance(obj, float):
         if obj != obj or obj in (_INF, -_INF) or abs(obj - MISSING_SENTINEL) < 1e-310:
             return None
+    elif obj.__class__.__module__ == "numpy":
+        # numpy scalars are not all float subclasses (float32, int64, bool_, ndarray),
+        # so json.dumps raised TypeError on them and the server's strict-JSON guard
+        # turned the WHOLE tool reply into "internal error" — one leaked numpy number
+        # reads as "the bridge is broken". tolist() maps every scalar to a plain
+        # Python value, which then goes through this function again.
+        if hasattr(obj, "tolist"):
+            return sanitize(obj.tolist())
     return obj
 
 
@@ -1251,6 +1278,48 @@ def _verify_file(path, must_be_image=True, min_bytes=1024):
 _HASH_RUN = re.compile(r"#+")
 
 
+def _stamp(path):
+    """(mtime_ns, size) of a file, or None when it is not there.
+
+    This is the cheap evidence that a write really happened. Existence alone is
+    not evidence: when a target already exists (re-exporting the same figure,
+    save-as onto a name used earlier), "the file is there" is true before Origin
+    does anything — measured with a stubbed save_fig returning True and writing
+    nothing: export() answered ok with the OLD file's bytes and dimensions.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+# Filesystem timestamps are coarser than time.time_ns() and the two clocks need not
+# agree to the tick, so a write that lands "in the same second" must not be judged
+# stale. One second of slack only matters for a file created in that very second —
+# which, for the leftover-file case this guards, is never the situation.
+_SLACK_NS = 1000000000
+
+
+def _proof_of_write(path, since=None, not_before=None):
+    """Did `path` appear or change as a result of the write we are checking?
+
+    since      = the stamp the target had BEFORE the call (None = it was absent)
+    not_before = time.time_ns() taken just before handing the work to Origin
+
+    Existence alone is not proof: a year-old `g1.png` used to satisfy the "#-filter
+    collapsed your name" search and even got renamed over the requested file.
+    """
+    st = _stamp(path)
+    if st is None:
+        return False
+    if since is not None and st == since:
+        return False
+    if not_before is not None and st[0] < not_before - _SLACK_NS:
+        return False
+    return True
+
+
 def _clean_component(part):
     stripped = part.rstrip(" .")
     return stripped if stripped else part
@@ -1324,16 +1393,24 @@ def _lift_warnings(out):
     return out
 
 
-def _written_or_mangled(target):
-    """Locate what Origin actually wrote; rename it back when its filter rewrote '#'."""
-    if os.path.isfile(target):
+def _written_or_mangled(target, since=None, not_before=None):
+    """Locate what Origin actually wrote; rename it back when its filter rewrote '#'.
+
+    `since` / `not_before` are the write's evidence: a file that still carries the
+    pre-call stamp, or one that is older than the call itself, is a leftover from an
+    earlier run — never proof, and never renamed. Measured: a year-old `g1.png`
+    sitting in the folder was "found", renamed over the requested `g#.png`, and
+    reported as "the # filter rewrote your name". That both lied and moved a file
+    the user had.
+    """
+    if os.path.isfile(target) and _proof_of_write(target, since, not_before):
         return target, None
     folder = os.path.dirname(target) or "."
     stem, ext = os.path.splitext(os.path.basename(target))
     if not _HASH_RUN.search(stem):
         return None, None
     # Origin replaced every run of '#' with digits; turn the requested name into a
-    # pattern and accept a single unambiguous match, then rename it back.
+    # pattern and accept a single unambiguous match that THIS call produced.
     pattern = []
     i = 0
     while i < len(stem):
@@ -1346,7 +1423,9 @@ def _written_or_mangled(target):
             i += 1
     rx = re.compile("^%s%s$" % ("".join(pattern), re.escape(ext)))
     try:
-        hits = [n for n in os.listdir(folder) if rx.match(n)]
+        hits = [n for n in os.listdir(folder)
+                if rx.match(n) and _proof_of_write(os.path.join(folder, n),
+                                                   None, not_before)]
     except OSError:
         hits = []
     if len(hits) != 1:
@@ -1379,7 +1458,10 @@ def status():
             "note": "pro_hint 只是从安装路径推断；Pro 能力以 origin_fit 能否跑通为准",
         }
 
-    return call(run, retry_safe=True)
+    # Every other tool result goes through sanitize(); status() was the one that did
+    # not, so a single numpy/inf value leaking from op.org_ver would have taken the
+    # whole reply down through the strict-JSON guard.
+    return sanitize(call(run, retry_safe=True))
 
 
 def read_file(path, comment=None):
@@ -2195,11 +2277,16 @@ def export_all(directory, fmt="png", width=1600):
             target = os.path.join(folder, "%s.%s" % (name or "Graph", fmt))
             try:
                 _prepare_write(target)
+                stamp = _stamp(target)
+                t0 = time.time_ns()
                 _safe(lambda p=page, t=target: p.save_fig(t, fmt, width=int(width)))
                 if not os.path.isfile(target):
                     _safe(lambda p=page, t=target: p.save_fig(t))
-                written, note = _written_or_mangled(target)
+                written, note = _written_or_mangled(target, since=stamp, not_before=t0)
                 if not written:
+                    if os.path.isfile(target) and _stamp(target) == stamp:
+                        raise OriginError("export_unverified",
+                                          "Origin 报成功但文件没有任何变化（疑似旧图）：%s" % target)
                     raise OriginError("export_failed", "Origin 说导出了但文件不存在：%s" % target)
                 info = _verify_file(written, must_be_image=fmt in IMAGE_MAGIC)
                 if not info["ok"]:
@@ -2455,6 +2542,10 @@ def export(graph, path="", fmt="png", width=1600):
         raw_path = str(path or "").strip()
         target_path = _norm_target(raw_path or os.path.join(folder, "%s.%s" % (name, fmt)), fmt)
         _prepare_write(target_path)
+        # Stamp first: everything below must be able to prove that THIS call wrote
+        # something, not that a file by that name already existed.
+        stamp = _stamp(target_path)
+        t0 = time.time_ns()
         # width only applies when a type is passed as well; the old call passed
         # neither, so `width` never did anything (measured: 400 and 12000 both came
         # back as the page size, 3216 px). Fall back to the plain call if the typed
@@ -2462,8 +2553,15 @@ def export(graph, path="", fmt="png", width=1600):
         _safe(lambda: page.save_fig(target_path, fmt, width=int(width)))
         if not os.path.isfile(target_path):
             _safe(lambda: page.save_fig(target_path))
-        written, note = _written_or_mangled(target_path)
+        written, note = _written_or_mangled(target_path, since=stamp, not_before=t0)
         if not written:
+            if os.path.isfile(target_path) and _stamp(target_path) == stamp:
+                raise OriginError(
+                    "export_unverified",
+                    "Origin 报成功，但目标文件没有任何变化，这很可能是上一次留下的旧图：%s" % target_path,
+                    ["换一个文件名再导出（例如在名字里加时间戳）",
+                     "文件可能被图片查看器/Origin 占用而无法覆盖：先关掉它",
+                     "先 origin_inspect 确认图页非空、origin_view 看一眼图"])
             raise OriginError("export_failed", "Origin 说导出了但文件不存在：%s" % target_path,
                               ["路径必须可写；UNC/未映射盘先排除",
                                "先 origin_inspect 确认图页非空"])
@@ -2509,20 +2607,32 @@ def _save_project(path=""):
         # Note originpro's path('p') is the project *folder*, so the bound file
         # has to be tracked here rather than asked from Origin.
         same_file = bool(_project_file) and os.path.normcase(_project_file) == os.path.normcase(target)
-        mtime_before = os.path.getmtime(target) if os.path.isfile(target) else 0
+        # Evidence that this call wrote something: op.save() returning True is a
+        # claim, the file's (mtime, size) moving is proof. Measured with a stubbed
+        # op.save returning True and writing nothing: save_project answered
+        # {"saved": true, "bytes": 1100} about the previous run's file.
+        stamp = _stamp(target)
+        t0 = time.time_ns()
         ok = bool(op.save()) if same_file else bool(op.save(target))
 
-        written, _note = _written_or_mangled(target)
-        if not written:
+        written, _note = _written_or_mangled(target, since=stamp, not_before=t0)
+        fresh = written is not None
+        if written:
+            target = written
+        # A project already bound to this path legitimately writes nothing when it
+        # has no pending edits — that is Origin's own Save-as-noop, not a failure.
+        unchanged = bool(same_file and not fresh and os.path.isfile(target))
+        if not fresh and not unchanged:
+            if os.path.isfile(target) and _stamp(target) == stamp:
+                raise OriginError("save_unverified",
+                                  "Origin 报 ok=%s，但工程文件没有任何变化：%s" % (ok, target),
+                                  ["文件可能正被 Origin 或另一个程序占用：先关掉再存",
+                                   "换一个不冲突的文件名，或省略 path 用自动时间戳命名",
+                                   "若只是想确认磁盘上的状态，用 origin_inspect 而不是重存"])
             raise OriginError("save_failed", "保存工程失败：%s (ok=%s)" % (target, ok),
                               ["确认目录可写；中文、空格、超长路径实测都能存，UNC/未映射盘不行",
                                "换一个不冲突的文件名，或省略 path 用自动时间戳命名"])
-        target = written
-        fresh = os.path.getmtime(target) > mtime_before
-        if not ok and not (same_file and not fresh):
-            raise OriginError("save_failed", "保存工程失败：%s (ok=%s)" % (target, ok),
-                              ["该文件可能正被 Origin 占用（工程绑定后会加锁）",
-                               "换一个不冲突的文件名，或省略 path 用自动时间戳命名"])
+        doubt = bool(same_file and ok and not fresh)
         info = _verify_file(target, must_be_image=False, min_bytes=256)
         if not info["ok"]:
             raise OriginError("save_suspect", "工程文件异常：%s" % info,
@@ -2538,6 +2648,20 @@ def _save_project(path=""):
         if same_file and not ok:
             out["unchanged"] = True
             out["note"] = "项目已绑定在该文件上且无待写变更，文件保持原样"
+        if doubt:
+            # op.save() said yes but the bytes on disk did not move. On a bound
+            # project that can be Origin refusing an overwrite silently, so say so
+            # instead of letting "saved: true" stand on its own.
+            out.setdefault("warnings", []).append(
+                "Origin 报存成功，但 %s 的修改时间与大小都没有变化：可能本来就没有待写变更，"
+                "也可能被其他程序占用而实际未写入" % os.path.basename(target))
+            out["proof_level"] = "unverified"
+        rel = _rel_note(path)
+        if rel:
+            # export() already warned about relative paths; save_project silently
+            # wrote into the process CWD (under dsh: the plugin install folder) —
+            # the exact pollution the export path was fixed for.
+            out.setdefault("warnings", []).append(rel)
         return sanitize(out)
 
     return run()
@@ -2652,7 +2776,9 @@ def exit_origin(save_to="", force=False):
                                           "，有窗口" if row and row.get("window") else ""),
                 ["确认要退出就再调 origin_exit(force=true)",
                  "只想清残留实例用 origin_reclaim；有窗口的实例它不会动",
-                 "先把用户的工程 origin_save_project 存下来"])
+                 "先把用户的工程 origin_save_project 存下来"]
+                + (["本次连接前的进程探测失败过（probe unavailable），所以桥不认领任何实例；"
+                    "这确实是它自己拉起的实例也用 force=true 确认"] if _ownership_uncertain else []))
         saved = _save_project(save_to)["path"] if save_to else ""
         err = ""
         try:
@@ -2847,15 +2973,23 @@ def _export_on_com_thread(page, path):
         target += ".png"
     ext = os.path.splitext(target)[1].lower()
     _prepare_write(target)
+    stamp = _stamp(target)
+    t0 = time.time_ns()
     _safe(lambda: page.save_fig(target))
-    written, note = _written_or_mangled(target)
+    written, note = _written_or_mangled(target, since=stamp, not_before=t0)
     if not written:
+        if os.path.isfile(target) and _stamp(target) == stamp:
+            raise OriginError("export_unverified",
+                              "矩阵图导出报成功但文件没有变化（疑似旧图）：%s" % target)
         raise OriginError("export_failed", "矩阵图导出没落盘：%s" % target)
     info = _verify_file(written, must_be_image=ext in IMAGE_MAGIC)
     if not info["ok"]:
         raise OriginError("export_suspect", "导出文件异常：%s" % info)
     if note:
         info["warnings"] = [note]
+    rel = _rel_note(path)
+    if rel:
+        info["warnings"] = (info.get("warnings") or []) + [rel]
     return info
 
 
@@ -2880,7 +3014,15 @@ def close_pages(kind="graph", names=None, dry_run=False):
         raise OriginError("bad_kind", "kind 不认识：%r" % kind,
                           ["可用：%s" % ", ".join(sorted(PAGE_KINDS))])
     want_cls, want_letter = want or ("", "")
-    keep = None if not names else [str(n) for n in names]
+    # `names` omitted (None) means "every page of this kind"; an EXPLICIT empty list
+    # means "I selected nothing". Both are falsy, and `not names` treated them the
+    # same — so close_pages(names=[]) destroyed every page of that kind. Callers that
+    # build the list from a filter hand over [] all the time (e.g. after clearing a
+    # selection), which is a very quiet way to lose the whole project.
+    if names is not None and not names:
+        return sanitize({"closed": [], "asked": [], "would_close": [],
+                         "note": "names 是空列表：一个页面都没选中（要关该类型的全部页面请省略 names）"})
+    keep = None if names is None else [str(n) for n in names]
 
     def collect():
         op = origin()

@@ -18,6 +18,13 @@ import struct
 
 MAGIC = b"\x80\xf2\x1b\x00"
 MAX_HEADER = 2400
+# 计数域之后还有一段固定长度的头部（技术名之后的方法表等），到数据区起点为止。
+# 原来数据区起点用 `size - 4n` 反推，于是 `start + 4n == size` 恒成立，文件尾部
+# 被截断或多出字节在结构上永远查不出来：少 4 字节时 y 整体前移 4 字节（第一个
+# 点是头部字节伪造成的 0.0，末值丢失，点数还报 600）；多 4 字节时最后一个点变
+# padding 0。真样本实测这段长度是 944（1445 - (493+8)），所以把它当格式常量，
+# 用头部位置算数据起点，再用文件长度校验点数。
+HEADER_TAIL = 944
 
 
 class BinFormatError(ValueError):
@@ -51,19 +58,35 @@ def _technique(buf):
 
 
 def _find_stream(buf):
-    """Return (total_floats, data_offset) from the duplicated u32 length field."""
+    """Return (total_floats, data_offset) from the duplicated u32 length field.
+
+    数据区起点由"计数域结束 + HEADER_TAIL"算出，不再由文件长度反推：
+    反推出来的起点让"数据区长度 == 4*点数"变成恒等式，截断和尾部 padding
+    都检测不到，y 会整体平移却仍然报满点数——静默篡改测量列。
+    """
     size = len(buf)
+    mismatch = None
     for off in range(16, min(1400, size - 12)):
         n = _u32(buf, off)
         if n != _u32(buf, off + 8) or not (2 <= n <= (size - off) // 4):
             continue
-        start = size - 4 * n
+        start = off + 8 + HEADER_TAIL
         if start <= off + 12 or start > MAX_HEADER:
+            continue
+        if size - start != 4 * n:
+            if mismatch is None or n > mismatch[0]:
+                mismatch = (n, start, size - start)
             continue
         vals = struct.unpack_from("<%df" % n, buf, start)
         if any(v != v or abs(v) > 1e15 for v in vals):
             continue
         return n, start
+    if mismatch is not None:
+        n, start, available = mismatch
+        raise BinFormatError(
+            "数据区长度与头部点数不符：头部计数域说 %d 个 float（%d 字节），"
+            "从第 %d 字节到文件尾只有 %d 字节。文件可能被截断或有尾部附加数据，"
+            "按这个长度读会把测量列整体平移，所以不读" % (n, 4 * n, start, available))
     raise BinFormatError(
         "找不到成对出现的 float32 计数域（文件可能是别的 .bin 格式，或已被截断）")
 
@@ -71,6 +94,13 @@ def _find_stream(buf):
 PARAM_BLOCK_BACK = 600          # the method block sits 600 bytes before the data
 P = {"init": 0, "high": 8, "low": 12, "segments": 28, "interval": 32,
      "rate": 40, "quiet": 44}
+# i-t / CA / CP 的采样间隔门禁：一个采样点 100 ns~2.8 小时都可能，再往外就不是
+# 电化学采样；总时长 1 µs~3 年之外同样当成头部读错。数字宽是故意的——门禁只拦
+# "反向/天文数字"，不替用户的实验方法做判断。
+MIN_STEP = 1e-7
+MAX_STEP = 1e4
+MIN_SPAN = 1e-6
+MAX_SPAN = 1e8
 
 
 def _params(buf, header):
@@ -143,6 +173,40 @@ def expected_points(params, positive_first=True):
     return total
 
 
+def interval_problem(params, total):
+    """i-t / CA / CP 的采样间隔能不能用来造时间轴？返回 None 或"为什么不可信"。
+
+    原来只要头部 interval 非 0 就无条件造 `axis=[i*interval]`，于是一个被读成
+    -0.1 的间隔画出反向时间轴、1e9 画出到 4.9e10 秒（约 1500 年）的轴，两者
+    都没有一句警告；CV/LSV 那条路有"点数必须吻合"的门禁，i-t 这条完全没有。
+    门禁用它自己的量纲判：间隔必须为正、有限，且与总点数/头部 quiet 期给出的
+    时间跨度相容。宁可不给轴，也不能给一条反向或天文数字的时间轴。
+    """
+    step = params.get("interval")
+    if step is None:
+        return "头部没读到采样间隔（方法块不完整），没法按间隔生成 t 轴"
+    if not (step > 0) or step != step or step == float("inf"):
+        return "头部采样间隔读成 %r s，不是正数，按它画出来的 t 轴会反向" % (step,)
+    span = step * max(1, total)
+    quiet = params.get("quiet") or 0.0
+    if not (MIN_STEP <= step <= MAX_STEP):
+        return ("头部采样间隔读成 %r s，超出电化学采样可能的范围（%g~%g s），"
+                "这个值不可信" % (step, MIN_STEP, MAX_STEP))
+    if span < MIN_SPAN:
+        return ("头部采样间隔 %r s × %d 点 = 总时长 %r s，比一次采样的最短时长 %g s "
+                "还小，这个值不可信" % (step, total, span, MIN_SPAN))
+    if span > MAX_SPAN:
+        return ("头部采样间隔 %r s × %d 点 = 总时长 %r s，比 %g s 还长，"
+                "这个值不可信" % (step, total, span, MAX_SPAN))
+    if quiet > 0 and span < quiet * 1e-6:
+        return ("头部采样间隔 %r s × %d 点 = 总时长 %r s，比头部 quiet 期 %r s "
+                "小 6 个数量级以上，这个值不可信" % (step, total, span, quiet))
+    if quiet > 0 and span > max(quiet, 1.0) * 1e6:
+        return ("头部采样间隔 %r s × %d 点 = 总时长 %r s，比头部 quiet 期 %r s "
+                "大 6 个数量级以上，这个值不可信" % (step, total, span, quiet))
+    return None
+
+
 def read_bin(path):
     """Decode a workstation .bin: the measured channel plus a reconstructed axis.
 
@@ -178,9 +242,14 @@ def read_bin(path):
         else:
             warnings.append("按头部方法参数应有 %d 个点，文件里是 %d 个，电势轴没重建"
                             % (expected_points(params, True), total))
-    elif tag in ("i-t", "CA", "CP") and params.get("interval"):
-        axis = [i * params["interval"] for i in range(total)]
-        axis_name, axis_kind = "t / s", "uniform_from_interval"
+    elif tag in ("i-t", "CA", "CP"):
+        why = interval_problem(params, total)
+        if why is None:
+            axis = [i * params["interval"] for i in range(total)]
+            axis_name, axis_kind = "t / s", "uniform_from_interval"
+        else:
+            warnings.append("%s 的时间轴没生成：%s。请按仪器软件里实际的采样间隔"
+                            "（共 %d 个点）自己建 t 轴" % (tag, why, total))
     else:
         warnings.append("%s 的 X 轴不在这个文件里（EIS 的频率表是另一套参数）" % (tag or "?",))
 

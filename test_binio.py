@@ -20,6 +20,9 @@ REAL = os.environ.get("ORIGIN_BRIDGE_REAL_BIN_DIR") or os.path.expanduser(
     os.path.join("~", "Desktop", "shiyan"))
 HEADER = 1445
 BASE = HEADER - binio.PARAM_BLOCK_BACK
+# 计数域相对数据区起点的距离是格式常量（真样本实测 944），所以合成文件必须把它
+# 摆在 493/501，而不是早先随手写的 489/497，否则合成布局和真布局差 4 字节。
+COUNT_OFF = 493                 # = HEADER - 944 - 8
 
 fails = []
 
@@ -32,16 +35,22 @@ def check(label, cond, got=""):
         fails.append(label)
 
 
-def build(path, tag, name, params, values, segments_field=2):
+def build(path, tag, name, params, values, segments_field=2, count_field=None, tail=b""):
+    """Synthesise a .bin.
+
+    count_field lets the declared point count differ from the array actually
+    written: that is how truncation / trailing padding look on disk, and the old
+    helper derived total from len(values) so it could never build those cases.
+    """
     buf = bytearray(b"\x00" * HEADER)
     buf[0:4] = binio.MAGIC
     struct.pack_into("<I", buf, 4, segments_field)
     head = tag.encode("latin-1") + struct.pack("<I", len(name)) + name.encode("latin-1")
     buf[8:8 + len(head)] = head
     buf[8 + len(head):8 + len(head) + 6] = b"r0815\x00"
-    total = len(values)
-    struct.pack_into("<I", buf, 489, total)
-    struct.pack_into("<I", buf, 497, total)      # the real headers repeat it 8 apart
+    declared = len(values) if count_field is None else count_field
+    struct.pack_into("<I", buf, COUNT_OFF, declared)
+    struct.pack_into("<I", buf, COUNT_OFF + 8, declared)  # the real headers repeat it 8 apart
     struct.pack_into("<f", buf, BASE + 0, params["init"])
     struct.pack_into("<f", buf, BASE + 8, params["high"])
     struct.pack_into("<f", buf, BASE + 12, params["low"])
@@ -50,7 +59,7 @@ def build(path, tag, name, params, values, segments_field=2):
     struct.pack_into("<f", buf, BASE + 40, params.get("rate", 0.1))
     struct.pack_into("<f", buf, BASE + 44, params.get("quiet", 2.0))
     with open(path, "wb") as fh:
-        fh.write(bytes(buf) + struct.pack("<%df" % total, *values))
+        fh.write(bytes(buf) + struct.pack("<%df" % len(values), *values) + tail)
     return path
 
 
@@ -59,6 +68,10 @@ print("binio .bin reader checks")
 print("=" * 60)
 
 os.makedirs(FIX, exist_ok=True)
+# 合成布局必须和真布局一致：计数域到数据区起点 = HEADER_TAIL（实测 944）。
+check("合成布局与 binio.HEADER_TAIL 一致",
+      getattr(binio, "HEADER_TAIL", None) == HEADER - COUNT_OFF - 8,
+      getattr(binio, "HEADER_TAIL", None))
 # A 20-leg CV between 0.1 and 0.13 V at 1 mV steps: 30 points per leg, 600 total.
 params = {"init": 0.1, "high": 0.13, "low": 0.1, "segments": 20, "interval": 0.001}
 truth_x, _ = binio.build_axis(params, 600)
@@ -94,12 +107,61 @@ check("point-count mismatch refuses to fake an axis",
       dw["axis"] != "reconstructed" and any("电势轴没重建" in w for w in dw["warnings"]),
       (dw["axis"], dw["warnings"]))
 
+# ------------------------------------------------- data region must match the header
+print()
+print("数据区长度与头部点数必须对上（截断/padding 不许静默平移测量列）")
+
+size_cases = (
+    ("少 1 个 float：尾部被截断 4 字节",
+     dict(values=truth_y[:599], count_field=600)),
+    ("正文多 4 字节 padding",
+     dict(values=truth_y, count_field=600, tail=b"\x00\x00\x00\x00")),
+    ("正文少 40 个点，计数域仍报 600",
+     dict(values=truth_y[:560], count_field=600)),
+)
+for ncase, (label, kw) in enumerate(size_cases):
+    broken = build(os.path.join(FIX, "synthetic_len_%d.bin" % ncase), "CV",
+                   "Cyclic Voltammetry", params, **kw)
+    try:
+        binio.read_bin(broken)
+        check("长度不符就报错：%s" % label, False, "no error raised")
+    except binio.BinFormatError as exc:
+        check("长度不符就报错：%s" % label, "数据区长度与头部点数不符" in str(exc),
+              str(exc)[:90])
+    except Exception as exc:
+        check("长度不符就报错：%s" % label, False, repr(exc)[:90])
+
 it = build(os.path.join(FIX, "synthetic_it.bin"), "i-t", "Amperometric i-t Curve",
            {"init": 0.5, "high": 0.5, "low": 0.0, "segments": 1, "interval": 0.1},
            [6e-5] * 50)
 di = binio.read_bin(it)
 check("i-t gets a time axis", di["axis"] == "uniform_from_interval" and
       abs(di["series"]["x"][10] - 1.0) < 1e-6, (di["axis"], di["series"]["x"][:3]))
+check("合理间隔不产生时间轴警告",
+      not any("时间轴没生成" in w for w in di["warnings"]), di["warnings"])
+
+# ------------------------------------------------- i-t interval gate
+print()
+print("i-t 的采样间隔要过门禁：反向/天文数字不许造轴")
+
+for ncase, (label, bad_step, must) in enumerate((
+        ("负间隔", -0.1, "反向"),
+        ("1e9 秒的间隔（≈1500 年）", 1e9, "采样间隔"),
+        ("1e-30 秒的间隔", 1e-30, "采样间隔"))):
+    badit = build(os.path.join(FIX, "synthetic_it_bad_%d.bin" % ncase), "i-t",
+                  "Amperometric i-t Curve",
+                  {"init": 0.5, "high": 0.5, "low": 0.0, "segments": 1,
+                   "interval": bad_step}, [6e-5] * 50)
+    dbad = binio.read_bin(badit)
+    # 警告里报的必须是"实际读到的"间隔（float32 往返后的值），不是我们写进去的十进制字面量
+    stored = repr(struct.unpack("<f", struct.pack("<f", bad_step))[0])
+    check("i-t %s 不给轴" % label,
+          dbad["axis"] == "none" and dbad["series"]["x"] is None,
+          (dbad["axis"], dbad["series"]["x"]))
+    check("i-t %s 说明为什么不可信" % label,
+          any(("时间轴没生成" in w) and (must in w) and (stored in w)
+              for w in dbad["warnings"]),
+          dbad["warnings"])
 
 p3 = os.path.join(FIX, "not_a_bin.bin")
 with open(p3, "wb") as fh:

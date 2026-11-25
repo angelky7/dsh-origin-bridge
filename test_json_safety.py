@@ -179,6 +179,86 @@ def main():
     ok("unknown method -> JSON-RPC -32601",
        (r2.get("error") or {}).get("code") == -32601, r2)
 
+    # ------------------------------- the tool payload is its own JSON document
+    # The envelope check above could not see this one: the payload is embedded as a
+    # *string* in content[0].text, so allow_nan=False in _encode_reply never looked
+    # at the numbers inside it. A client that parses `text` failed on the whole
+    # tool result while the envelope stayed perfectly legal.
+    poisoned = srv._tool_result(1, {"ok": True, "v": math.nan, "nested": {"w": INF},
+                                    "z": [1.0, -INF]}, False)
+    blob = srv._encode_reply(poisoned).decode("utf-8")
+    envelope = strict(blob)
+    text = envelope["result"]["content"][0]["text"]
+    try:
+        body = strict(text)
+        payload_ok = True
+    except ValueError as exc:
+        body, payload_ok = {}, exc
+    ok("tool payload text is strict JSON", payload_ok is True, payload_ok)
+    ok("non-finite numbers are folded to null",
+       body.get("v") is None and body.get("z") == [1.0, None], body)
+    ok("the payload says what it dropped",
+       any("非 JSON 数值" in w for w in body.get("warnings") or []), body.get("warnings"))
+
+    # ------------------------------------------------ null vs missing argument
+    # `path: null` used to slip through (the validator skipped None wholesale), then
+    # os.path.abspath(None) raised TypeError -> "origin_unavailable / the COM channel
+    # is damaged" for a tool that never touches Origin, plus the suspect flag forcing
+    # a reset of a healthy session.
+    ok("explicit null on a required string is bad_arguments",
+       code_for("origin_import", {"path": None}) == "bad_arguments")
+    before_suspect = srv.originlab._suspect
+    srv._handle({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+                 "params": {"name": "origin_read_file", "arguments": {"path": None}}})
+    ok("a null argument does not poison the COM channel",
+       srv.originlab._suspect == before_suspect, srv.originlab._suspect)
+
+    # ------------------------------------------------ notifications are silent
+    ran = []
+    real_status = srv._BY_NAME["origin_status"]["run"]
+    srv._BY_NAME["origin_status"]["run"] = lambda _a: ran.append(1) or {"ok": True}
+    try:
+        silent = srv._handle({"jsonrpc": "2.0", "method": "tools/call",
+                              "params": {"name": "origin_status", "arguments": {}}})
+    finally:
+        srv._BY_NAME["origin_status"]["run"] = real_status
+    ok("an id-less tools/call gets no reply", silent is None, silent)
+    ok("an id-less tools/call does not run the tool", ran == [], ran)
+
+    # A message without a method is an Invalid Request, not silence and not
+    # "method not found: None".
+    no_method = srv._handle({"jsonrpc": "2.0", "id": 55})
+    ok("a message without method -> -32600",
+       (no_method.get("error") or {}).get("code") == -32600, no_method)
+    ok("the -32600 answer keeps the id", no_method.get("id") == 55, no_method)
+
+    # ------------------------------------------------ integral floats as integers
+    # JSON Schema counts 1600.0 as an integer; a model computing a width sends one.
+    ok("1600.0 is accepted as an integer", code_for("origin_export", {"width": 1600.0}) == "no-raise")
+    ok("1600.5 is still rejected", code_for("origin_export", {"width": 1600.5}) == "bad_arguments")
+
+    # ------------------------------------------------ --tools under a legacy console
+    # print() used sys.stdout's locale code page: cp1252 either mojibaked a UTF-8
+    # consumer or died with UnicodeEncodeError and exit 1 — and --tools is exactly
+    # the command CI and the README tell people to run.
+    env3 = dict(env, PYTHONIOENCODING="cp1252")
+    proc4 = subprocess.run([sys.executable, os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), "server.py"), "--tools"],
+        capture_output=True, env=env3, timeout=120)
+    raw = proc4.stdout
+    try:
+        decoded = raw.decode("utf-8")
+        utf8_ok = True
+    except UnicodeDecodeError as exc:
+        decoded, utf8_ok = "", exc
+    ok("--tools survives a cp1252 stdout", proc4.returncode == 0,
+       proc4.stderr.decode("utf-8", "replace")[-160:])
+    ok("--tools output is UTF-8 regardless of the console",
+       utf8_ok is True and "origin_status" in decoded, utf8_ok)
+    ok("--tools still lists exactly 27 tools",
+       len([ln for ln in decoded.splitlines() if ln.strip()]) == 27,
+       len(decoded.splitlines()))
+
     print("\n%d/%d json-safety checks passed" % (PASSED, PASSED + len(FAILED)))
     if FAILED:
         for f in FAILED:

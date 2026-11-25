@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.19"
+SERVER_VERSION = "0.4.20"
 PROTOCOL = "2024-11-05"
 
 
@@ -492,8 +492,84 @@ _BY_NAME = {t["name"]: t for t in TOOLS}
 
 
 def _log(msg):
-    sys.stderr.write("[%s] %s\n" % (SERVER_NAME, msg))
-    sys.stderr.flush()
+    # Write UTF-8 bytes rather than text: sys.stderr carries the console code page
+    # (cp936 here, cp1252 elsewhere), and a stderr.write of a path or tool name the
+    # code page cannot encode raises UnicodeEncodeError *inside the reader thread* —
+    # which kills the only thread that reads stdin, i.e. the bridge looks hung with
+    # no diagnostic. Dropping an unencodable character is always better than dying.
+    line = "[%s] %s\n" % (SERVER_NAME, msg)
+    try:
+        stream = getattr(sys.stderr, "buffer", None)
+        if stream is not None:
+            stream.write(line.encode("utf-8", "replace"))
+            stream.flush()
+            return
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        sys.stderr.write(line.encode("ascii", "replace").decode("ascii"))
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001 - logging must never take the server down
+        pass
+
+
+def _nonfinite(v):
+    return isinstance(v, float) and (v != v or v in (float("inf"), float("-inf")))
+
+
+def _scrub_nonfinite(obj):
+    """Replace bare NaN/Infinity with None, reporting how many were replaced.
+
+    Used only on the degraded path: the payload could not be written as strict JSON even
+    with allow_nan=False, and answering "internal error" would throw away a result
+    the user asked for. Losing one number (null) beats losing the whole answer.
+    """
+    dropped = []
+
+    def walk(value):
+        if _nonfinite(value):
+            dropped.append(value)
+            return None
+        if isinstance(value, dict):
+            return {k: walk(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [walk(v) for v in value]
+        return value
+
+    return walk(obj), dropped
+
+
+def _strict_text(body):
+    """Serialize a tool payload as strict JSON, or degrade it honestly.
+
+    allow_nan=False has to run HERE and not only in _encode_reply: the payload is
+    embedded as a *string* inside content[0].text, so the outer dump never sees the
+    numbers nested in it. Measured before the fix: {"v": NaN, "w": Infinity} went
+    out as the text `{"v": NaN, "w": Infinity}` while the envelope stayed legal —
+    a client that parses `text` as JSON (dsh does) failed on the whole tool result,
+    and the "not strict JSON" guard never logged a thing because it was looking at
+    the envelope instead of the text.
+    """
+    try:
+        return json.dumps(body, ensure_ascii=False, default=str, allow_nan=False), None
+    except (ValueError, TypeError) as exc:
+        _log("tool payload was not strict JSON (%r); degrading non-finite numbers" % (exc,))
+    if isinstance(body, dict):
+        clean, dropped = _scrub_nonfinite(body)
+        if dropped:
+            notes = list(clean.get("warnings") or [])
+            notes.append("返回值里有 %d 个非 JSON 数值（NaN/Infinity），已按 null 交出：%s"
+                         % (len(dropped), ", ".join(str(v) for v in dropped[:3])))
+            clean["warnings"] = notes
+        body = clean
+    try:
+        return json.dumps(body, ensure_ascii=False, default=str, allow_nan=False), "scrubbed"
+    except (ValueError, TypeError):
+        return json.dumps({"ok": False, "code": "nonjson_payload",
+                           "message": "工具返回值无法序列化成严格 JSON，已丢弃这次结果",
+                           "next_actions": ["把参数缩小/改简单后重试",
+                                            "若反复出现，用 origin_inspect 确认页面状态"]},
+                          ensure_ascii=False), "error"
 
 
 def _tool_result(call_id, payload, is_error=False):
@@ -504,12 +580,26 @@ def _tool_result(call_id, payload, is_error=False):
         body["image_returned"] = True
         content.append({"type": "image", "data": payload["image_base64"],
                         "mimeType": payload.get("mime", "image/png")})
-    content.append({"type": "text", "text": json.dumps(body, ensure_ascii=False, default=str)})
+    text, degraded = _strict_text(body)
+    if degraded == "error":
+        is_error = True
+    content.append({"type": "text", "text": text})
     return {"jsonrpc": "2.0", "id": call_id, "result": {"content": content, "isError": is_error}}
 
 
 _JSON_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
                "array": list, "object": dict}
+
+
+def request_id(value):
+    """The id to echo back, or None when it cannot be one.
+
+    JSON-RPC ids are strings or numbers; `true` is not an id, and neither is a list
+    or a dict (a dict id would also be unhashable as a key).
+    """
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    return value
 
 
 def _validate_args(name, args, schema):
@@ -524,11 +614,20 @@ def _validate_args(name, args, schema):
     props = (schema or {}).get("properties") or {}
     problems = []
     for key, spec in props.items():
-        if key not in args or args[key] is None:
+        if key not in args:
             continue
         value = args[key]
         types = spec.get("type")
         types = types if isinstance(types, list) else ([types] if types else [])
+        if value is None:
+            # An explicit null is NOT the same as omitting the key: the tool then
+            # reads a["path"] -> None, os.path.abspath(None) raises TypeError, and
+            # that used to come back as `origin_unavailable` with a "the COM channel
+            # is damaged" hint — for origin_read_file, which never touches COM — and
+            # it also set the suspect flag, forcing a reset of a healthy session.
+            if types and "null" not in types:
+                problems.append("%s 不能为 null（应为 %s）" % (key, "/".join(types)))
+            continue
         if types:
             def fits(t):
                 py = _JSON_TYPES.get(t)
@@ -536,6 +635,15 @@ def _validate_args(name, args, schema):
                     return True
                 if t in ("integer", "number") and isinstance(value, bool):
                     return False
+                if t == "integer":
+                    # JSON Schema counts 1600.0 as an integer (a zero fraction is
+                    # still an integer). A model that computed a width sends a
+                    # float, and isinstance(1600.0, int) is False — measured:
+                    # origin_export(width=1600.0) used to be refused as
+                    # bad_arguments while width=1600 passed.
+                    if isinstance(value, int):
+                        return True
+                    return isinstance(value, float) and value.is_integer()
                 return isinstance(value, py)
             if not any(fits(t) for t in types):
                 problems.append("%s 应为 %s，收到 %s"
@@ -555,6 +663,24 @@ def _handle(msg):
     params = msg.get("params")
     if not isinstance(params, dict):
         params = {}
+
+    if not isinstance(method, str) or not method:
+        # A message with no method is an Invalid Request (-32600), not "method not
+        # found: None" and definitely not silence. Measured: `{}` and
+        # {"jsonrpc":"2.0"} produced no reply at all (a client waits forever) while
+        # {"id":55} answered -32601 "method not found: None" — three different
+        # verdicts for the same malformed shape.
+        return {"jsonrpc": "2.0", "id": request_id(call_id),
+                "error": {"code": -32600, "message": "invalid request: 缺少 method"}}
+
+    if "id" not in msg:
+        # No id means this is a *notification*: JSON-RPC forbids answering it, and it
+        # must not run a tool either. Measured: an id-less tools/call really executed
+        # origin_status and answered with id:null, so a client that simply forgot the
+        # id got a real side effect (plus a reply it could never correlate).
+        if method == "tools/call":
+            _log("tools/call 没有 id，按通知处理：不执行、不应答")
+        return None
 
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": call_id, "result": {
@@ -650,8 +776,20 @@ def _encode_reply(reply):
 
 def main():
     if "--tools" in sys.argv:
-        for t in TOOLS:
-            print("%-20s %s" % (t["name"], t["description"].split("。")[0]))
+        lines = ["%-20s %s" % (t["name"], t["description"].split("。")[0]) for t in TOOLS]
+        # Bytes, not print(): print() uses sys.stdout's locale encoding, so on a
+        # cp1252/cp936 console this either emits GBK (mojibake for a UTF-8 reader)
+        # or dies outright with UnicodeEncodeError — measured: PYTHONIOENCODING=cp1252
+        # made `--tools` exit 1 with zero bytes on stdout, which is exactly the
+        # invocation CI and the README tell people to run.
+        out = getattr(sys.stdout, "buffer", None)
+        payload = ("\n".join(lines) + "\n").encode("utf-8", "replace")
+        if out is not None:
+            out.write(payload)
+            out.flush()
+        else:
+            sys.stdout.write(payload.decode("utf-8"))
+            sys.stdout.flush()
         return 0
 
     stdin = sys.stdin.buffer
@@ -693,13 +831,19 @@ def main():
     def request_key(value):
         # JSON-RPC ids are strings or numbers; anything else is malformed and
         # must not be used as a dict key (a list/dict id would raise).
-        if isinstance(value, bool) or not isinstance(value, (str, int)):
-            return None
-        return value
+        return request_id(value)
 
     def reader():
         while True:
-            raw = stdin.readline(max_line + 1)
+            try:
+                raw = stdin.readline(max_line + 1)
+            except Exception as exc:  # noqa: BLE001
+                # A read error here used to kill this thread silently, and the main
+                # loop then waited on inbox.get() for a message nobody would ever
+                # produce: a hung bridge, no reply, no log. Treat it as EOF.
+                _log("stdin read failed (%r)；按 EOF 处理" % (exc,))
+                inbox.put({"__eof__": True})
+                return
             if not raw:
                 inbox.put({"__eof__": True})
                 return
@@ -730,14 +874,24 @@ def main():
             if isinstance(msg, dict) and msg.get("method") == "notifications/cancelled":
                 # Handled here, not on the executor: this is the only message that
                 # must take effect while a tool is blocking the main thread.
-                key = request_key((msg.get("params") or {}).get("requestId"))
-                with pending_lock:
-                    ev = pending.get(key) if key is not None else None
+                # params MUST be treated as untrusted: JSON-RPC allows an array here
+                # (`"params": [1]`), and `(params or {}).get` on a non-empty list
+                # raised AttributeError inside this thread — which then died, leaving
+                # the main loop parked in inbox.get() forever. Measured: one such line
+                # killed the whole session with zero diagnostics.
+                try:
+                    p = msg.get("params")
+                    key = request_key(p.get("requestId") if isinstance(p, dict) else None)
+                    ev = None
+                    with pending_lock:
+                        ev = pending.get(key) if key is not None else None
+                        if ev is not None:
+                            cancelled.add(key)
                     if ev is not None:
-                        cancelled.add(key)
-                if ev is not None:
-                    _log("cancel request id=%r" % (key,))
-                    ev.set()
+                        _log("cancel request id=%r" % (key,))
+                        ev.set()
+                except Exception as exc:  # noqa: BLE001
+                    _log("cancel notification ignored (%r)" % (exc,))
                 continue
             if isinstance(msg, dict) and msg.get("method") == "tools/call":
                 key = request_key(msg.get("id"))

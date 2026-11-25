@@ -85,10 +85,19 @@ def main():
         src = inspect.getsource(ol.import_file)
         ok("import_file still allows .xlsx", "二进制表格" not in src)
 
+        # 这个 fixture 必须自建：它本来是 test_binio.py 的产物，又写在 .gitignore 里，
+        # 所以全新解包（或先跑本文件、README 就是邀请用户单独跑 test_readfile.py）时它
+        # 不存在——这一项会假红成“a .bin is still routed to binio, not refused”，
+        # 把“路由没被拒绝”误报成失败。内容与 test_binio.py 写的一致：只要有 .bin 后缀、
+        # 会被 binio 接手就够；每次覆盖写，重复跑同一份状态，避免上次留下的怪文件干扰。
+        bin_fixture = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "fixtures", "not_a_bin.bin")
+        os.makedirs(os.path.dirname(bin_fixture), exist_ok=True)
+        with open(bin_fixture, "wb") as fh:
+            fh.write(b"MZ\x90\x00" + b"\x00" * 2000)
+
         ok("a .bin is still routed to binio, not refused",
-           code_of(lambda: ol.read_file(os.path.join(
-               os.path.dirname(os.path.abspath(__file__)), "fixtures", "not_a_bin.bin")))
-           in ("parse_failed", "no-raise"), "binio path")
+           code_of(lambda: ol.read_file(bin_fixture)) in ("parse_failed", "no-raise"), "binio path")
 
         print("\n%d/%d read_file checks passed" % (PASSED, PASSED + len(FAILED)))
         if FAILED:

@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>1139 例全链路测试全部通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>27 个工具 · <b>612 项随包检查全部实测通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1139%2F1139%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-612%2F612%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -41,13 +41,15 @@
 2. **不谎报成功。** 写操作要么读回证据，要么明确失败/降级；`unknown` 就说 `unknown`，绝不把"请求发出去了"当成"事情做成了"。
 3. **生命周期 fail-closed。** 会话锁、实例归属、退出、超时：拿不准就拒绝或如实报告，不猜、不静默重试写操作、不杀归属不明的进程。
 4. **不碰用户的东西。** 有窗口的 Origin 永远不动；只读文件不覆盖；测试数据与提示词不上传、不进包。
-5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 493 项离线/边界检查，任何人都能复跑。
+5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 **612 项**离线/边界检查，任何人都能复跑。
 
 **明确的非目标**：工具数量竞赛、云端渲染、改写 Origin 本身。单 COM worker 是当前的有意选择——除非实测证明它隔离不了，否则不引入多 worker 的复杂度。
 
 **取消语义（0.4.18）**：MCP 的 `notifications/cancelled` 会立即生效——排队中尚未开始的任务直接跳过并以 JSON-RPC `-32800` 答复；已经在 Origin 里执行的调用无法停止，会如实报 `executed:"unknown"`，并在 worker 空闲前拒绝新任务。
 
 **COM 释放（0.4.19，实测）**：重置时先清句柄表，再在 COM worker 上 `gc.collect()`，并读取 originpro 自己的包装器计数 `_OBJS_COUNT`。真机 import + 两图产生 **3 个包装器，重置后归零**，且收集线程就是附着所在的 worker——包装器的 `__del__` 及其持有的 SWIG 对象在同一条线程上释放。`po.Detach()` 只在解释器退出时触发，不在这条路径上。
+
+**读回证据（0.4.20）**：`export` / `export_all` / `origin_save_project` / 矩阵与预设出图四个落盘入口，以前把"文件存在"当成"这次写成功了"。同名重出一张图、或 Save-As 到一个用过的名字时，那个文件在 Origin 动手之前就已经存在，于是旧图被当成新结果交出（实测：`save_fig` 桩返回 True 却一个字节不写，`export` 回了 ok + 旧文件的字节数与尺寸，`export_all` 回了 `proof_level:"verified"`）。现在四个入口共用一份证据：写之前记下 `(mtime_ns, size)` 与调用时刻，写完必须证明文件**变过**且是**这次**变的——旧文件与比本次调用更早的 `#` 编号候选都不再被采信、也不再被改名，拿不出证据就报 `export_unverified` / `save_unverified`，而不是报成功。
 
 ## 为什么是它
 
@@ -56,7 +58,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **1000+ 次真实测试，不是自称。** **1139 例**全链路用例跑在真实 stdio 服务器 + 本机 OriginPro 上，**1139 通过 / 0 失败**：27 个工具每个至少 15 例、最多 135 例，按副作用分五层（L0 纯解析 301、L1 只读 COM 63、L2 改会话 531、L3 落盘 166、L4 进程级 78）。提示词全部按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，所以失败只会是产品问题，不会是题目写错。另有 **493 项**离线/单元/边界检查（asciiio 84、binio 15、lifecycle 115、smoke 129、edge 41、paths 35、json 29、readfile 12、labtalk 33；binio 在机器上有真实工作站导出时会追加逐点对账项）**随包发布，你可以直接复跑**；那 1139 例题库含提示词与模拟数据，是开发侧资产，不随包分发。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **612 项随包检查，不是自称。** 八个离线套件（asciiio 137、binio 26、lifecycle 115、paths 35、json 43、readfile 12、labtalk 33、evidence 41）加两个真机套件（smoke 129、edge 41）**随包发布，你可以直接复跑**，本文里每一个数字都由 `check_claims.py` 重新跑一遍再对账。0.4.20 这一版的数字全部来自实际运行：离线 442 项在**没有 Origin** 的解释器上跑，smoke 与 edge 在装好的 OriginPro 2024 + originpro 1.1.15 上跑（**129/129、41/41**，其中 edge 里"随包启动器能拉起 server"这一条在 0.4.19 的机器上是红的）。另有开发侧资产一套 **1139 例全链路题库**（`cases/` + `run_cases.py`，含提示词与模拟数据，不随包分发）——它最后一次全绿是 0.4.19 那一轮；**本版没有复跑它**，因为它在仓库之外，本版所有新增回归都落在上面那两个随包套件里。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -112,6 +114,12 @@ pip install originpro numpy        # 国内网络慢就加 -i https://pypi.tuna.
 > - **PATH 上没有 `python`**（补丁默认命令就是 `python`）：桥进程起不来，`failOnStartupError: false` 保证 dsh 照常启动，代价是那一轮**工具完全不注册**、也没有报错。这时先设 `ORIGIN_BRIDGE_PYTHON`。
 >
 > Origin 没开**不影响**注册：COM 连接是第一次工具调用时才建立的。
+>
+> **PATH 上的 `python` 可能是商店别名**（0 字节的 App Execution Alias，一跑就 9009，把真正的解释器挡在后面）。装完先跑一次自检：
+> ```powershell
+> node "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-origin-bridge\bin\origin-bridge.mjs" --check
+> ```
+> 它会打印选中的解释器、`server.py` 是否可读、`numpy` / `originpro` 能不能导入（缺 `originpro` 只告警——工具照常注册，每次调用报 `missing_originpro`）。选错了解释器就 `setx ORIGIN_BRIDGE_PYTHON "<真解释器>"`，再彻底重启 dsh。
 
 包内补丁的默认取值是 `python`（PATH 上那个）和 `profiles/desktop`。依赖装在 venv 里、或者你用的是别的 profile，就设这两个用户环境变量（设完要重开终端、再彻底重启 dsh）：
 
@@ -148,16 +156,17 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 项，看到 ALL GOOD 才算过
 .\.venv\Scripts\python.exe edge_checks.py             # 41 项边界
-.\.venv\Scripts\python.exe test_asciiio.py            # 84 项，不需要 Origin
-.\.venv\Scripts\python.exe test_binio.py              # 15 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
+.\.venv\Scripts\python.exe test_asciiio.py            # 137 项，不需要 Origin
+.\.venv\Scripts\python.exe test_binio.py              # 26 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
 .\.venv\Scripts\python.exe test_lifecycle.py          # 115 项，不需要 Origin：实例分类/归属回收/掉线重连/超时取消/退出核实/会话锁的安全边界
+.\.venv\Scripts\python.exe test_evidence.py           # 41 项，不需要 Origin：读回证据（旧文件不算证据）/改名候选的新鲜度/close_pages 空名单/探测失败时不认领实例
 .\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
-.\.venv\Scripts\python.exe test_json_safety.py        # 29 项，不需要 Origin：返回值必须是严格 JSON
+.\.venv\Scripts\python.exe test_json_safety.py        # 43 项，不需要 Origin：返回值必须是严格 JSON，工具载荷自己的 JSON 也要严格
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 493 项随包发布，你可以自己复跑。另外那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
+上面这 612 项随包发布，你可以自己复跑。那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；它的最后一次全绿是 0.4.19 那轮，**0.4.20 没有复跑它**（不在本仓库里）。这一版的所有数字都是上面那两组套件的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -337,6 +346,10 @@ Origin Bridge 的做法：
 | `origin_busy` | 另一个桥会话正持有 Origin（锁在 `%LOCALAPPDATA%\origin-bridge\session.lock`）。等那边结束；确认卡死了就删锁文件重试 |
 | 导出报了 `export_failed` 但目录里有张图 | 看 `warnings`：文件名里的 `#` 会被 Origin 换成编号，桥认出后会改名回你要的名字；认出多个候选时不会猜，直接报错让你换名 |
 | `ERR_PNPM_NO_MATCHING_VERSION`（装不上） | 镜像滞后，不是没发布：`npm config get registry` 看一眼，加 `--registry=https://registry.npmjs.org/` 或改用 `file:` 离线包 |
+| `export_unverified` / `save_unverified` | Origin 回了"成功"，但目标文件没有任何变化——最常见的原因就是那个路径上**已经有上一次的旧图/旧工程**。换一个文件名（加时间戳最省事），或先删掉旧文件；文件也可能被图片查看器、Origin 或同步盘占用着无法覆盖 |
+| 第一次 `origin_instances` 里 `ownership: "uncertain"` | 连接前的进程探测失败过（powershell 被杀软拦住/超时），本会话**不认领任何实例**，`origin_exit` 会因此报 `foreign_instance`。确认确实是桥自己拉起的实例，就用 `origin_exit(force=true)`；重启 dsh 后探测正常即恢复 |
+| `origin_close_pages(names=[])` 什么都没关 | 这是**故意的**：空列表 = 一个都没选中。要关该类型的全部页面请**省略** `names`，先用 `dry_run: true` 看一眼 `would_close` 更稳 |
+| 解释器找不到 / `origin-bridge` 一启动就退出（9009） | PATH 上第一个 `python` 常是 Windows 商店的"应用执行别名"（0 字节，一跑就 9009），把真解释器挡在后面。先跑 `node bin/origin-bridge.mjs --check` 看它选了谁、`import numpy/originpro` 是否 OK；用 `setx ORIGIN_BRIDGE_PYTHON "<真解释器路径>"` 指定即可。dsh 侧同理：`cordis.patch.yml` 的默认命令是 PATH 上的 `python` |
 
 ## 给维护者
 
@@ -352,7 +365,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 493 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 612 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 

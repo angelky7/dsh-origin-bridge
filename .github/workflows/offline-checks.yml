@@ -44,6 +44,8 @@ jobs:
         run: python test_labtalk_guard.py
       - name: lifecycle classification (no Origin needed)
         run: python test_lifecycle.py
+      - name: read-back evidence and destructive defaults
+        run: python test_evidence.py
       - name: README coverage claims match the measured suites
         run: python check_claims.py
       - name: server advertises all 27 tools
@@ -51,3 +53,25 @@ jobs:
           $n = (python server.py --tools | Measure-Object -Line).Lines
           Write-Host "tools: $n"
           if ($n -ne 27) { exit 1 }
+      # 随包发布的启动器是最难被用户看见的一部分：它在机器上找不到能用的解释器时
+      # 只回一个退出码，客户端看到的就是“桥挂了”。--check 不启动 MCP、不启动 Origin，
+      # 只验证“选了哪个解释器 + server.py 可读 + numpy 可导入”，让它也进 CI。
+      - name: shipped node launcher can find an interpreter
+        run: node bin/origin-bridge.mjs --check
+      # 版本号在两处写死（package.json 与 server.py 的 SERVER_VERSION）：发版时漏改一处，
+      # npm 包版本就和 MCP serverInfo 版本静默漂移，而上面所有套件都不会发现。两条断言
+      # 各自独立成 step —— 本仓库踩过“pwsh 多命令步骤中间失败不红”的坑（见 0.4.14 的叙述），
+      # 只有一条命令一个 step，失败才必然让 job 变红。
+      - name: version consistency (package.json == server.py SERVER_VERSION)
+        run: |
+          python -c "import json,pathlib; pkg=json.loads(pathlib.Path('package.json').read_text(encoding='utf-8')); lines=[l for l in pathlib.Path('server.py').read_text(encoding='utf-8').splitlines() if l.startswith('SERVER_VERSION')]; sv=lines[0].split('=',1)[1].strip().strip(chr(34)+chr(39)) if lines else '<SERVER_VERSION missing>'; print('package.json version       =', pkg['version']); print('server.py SERVER_VERSION   =', sv); raise SystemExit(0 if sv == pkg['version'] else 1)"
+      # exports 承诺 "./locale/*.json"，files 却曾经只列了 en/zh —— “发布物比契约少”
+      # 这类漏洞只有比对真实 tarball 清单才发现，所以这里跑一次 dry-run 再逐个点名核对。
+      # 缺任何一个都列出缺项并 exit 1，避免用户装到缺少 server.py 的半包。
+      - name: npm tarball completeness
+        run: |
+          # 显式 Out-File -Encoding utf8：Windows PowerShell 5.1 的 ">" 会写成 UTF-16LE，
+          # pwsh 7 写成 UTF-8，两种都有人跑；下面 python 用 utf-8-sig 吃掉可能的 BOM。
+          npm pack --dry-run --json | Out-File -FilePath pack.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { Write-Host 'npm pack --dry-run failed'; exit 1 }
+          python -c "import json; need=['server.py','originlab.py','asciiio.py','binio.py','cordis.patch.yml','bin/origin-bridge.mjs','locale/en.json','locale/zh.json','index.js','test_evidence.py','test_json_safety.py','test_asciiio.py','check_claims.py']; data=json.load(open('pack.json',encoding='utf-8-sig')); meta=data[0] if isinstance(data,list) else data; files=set(f['path'] for f in meta['files']); missing=[n for n in need if n not in files]; print('tarball files:', len(files)); print('missing from tarball:', missing); raise SystemExit(1 if missing else 0)"

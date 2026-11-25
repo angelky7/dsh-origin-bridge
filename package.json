@@ -52,6 +52,7 @@
     "edge_checks.py",
     "test_paths.py",
     "test_json_safety.py",
+    "test_evidence.py",
     "test_readfile.py",
     "test_labtalk_guard.py",
     "test_asciiio.py",

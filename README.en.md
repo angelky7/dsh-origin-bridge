@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 tools · <b>1139/1139 full-chain tests passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
+  <sub>27 tools · <b>612/612 shipped checks passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
 </p>
 
 <p align="center">
   <a href="#requirements"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-1139%2F1139%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-612%2F612%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -33,13 +33,15 @@ Not "the Origin MCP with the most tools" — the one you can trust on real lab d
 2. **Never report success it cannot prove.** A write either reads evidence back or fails/degrades honestly; `unknown` stays `unknown`. "The request was sent" is never treated as "the thing was done".
 3. **Fail closed on lifecycle.** Session lock, instance ownership, exit, timeouts: when in doubt, refuse or report — never guess, never silently replay a write, never kill an instance whose ownership is unproven.
 4. **Never touch what is the user's.** A windowed Origin is never killed; read-only files are never overwritten; test data and prompts are never uploaded or shipped.
-5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and 493 offline/edge checks ship inside the package for anyone to re-run.
+5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and **612** offline/edge checks ship inside the package for anyone to re-run.
 
 **Explicit non-goals:** a tool-count race, cloud rendering, rewriting Origin itself. A single COM worker is a deliberate choice — no multi-worker complexity unless measurement proves COM cannot be isolated.
 
 **Cancellation semantics (0.4.18):** MCP `notifications/cancelled` takes effect immediately — a queued task that has not started is skipped and answered with JSON-RPC `-32800`; a call already inside Origin cannot be stopped and is reported as `executed:"unknown"`, with new calls refused until the worker frees up.
 
 **COM release (0.4.19, measured):** a reset clears the handle table, then runs `gc.collect()` on the COM worker and reads originpro's own wrapper counter `_OBJS_COUNT`. On real hardware, import + two plots produced **3 wrappers; after the reset the counter was 0**, and the collecting thread was the worker that attached — the wrappers' `__del__` and the SWIG objects they hold were released on that thread. `po.Detach()` only runs at interpreter exit and is not on this path.
+
+**Read-back evidence (0.4.20):** the four write destinations (`export`, `export_all`, `origin_save_project`, and the matrix/preset image path) used to treat "the file exists" as "this call wrote it". Re-export a figure under the same name, or Save-As onto a name used before, and the file is already there before Origin does anything — so a stale file was handed out as the new result (measured: a `save_fig` stub returning True while writing nothing made `export` answer ok with the old file's bytes and dimensions, and `export_all` answer `proof_level:"verified"`). All four now share one piece of evidence: the `(mtime_ns, size)` stamp and the call's own start time are taken before the write, and afterwards the file must prove it **changed** and changed for **this** call. A leftover file, and a `#`-numbered candidate older than the call, are no longer accepted and no longer renamed; without proof the answer is `export_unverified` / `save_unverified`, not success.
 
 ## Why
 
@@ -48,7 +50,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **1000+ real tests, not a claim.** 1139 full-chain cases run against a real stdio server + local OriginPro — 1139 passed / 0 failed: every tool has at least 15 cases (up to 135), grouped into five side-effect layers (L0 pure parsing 301, L1 read-only COM 63, L2 session-mutating 531, L3 on-disk 166, L4 process-level 78). Prompts are written the way a person talks, and every case is validated against the live `tools/list` schema first — so a failure can only be a product bug, never a miswritten test. Another **493** offline/unit/edge checks ship **inside the package** (asciiio 84, binio 15, lifecycle 115, smoke 129, edge 41, paths 35, json 29, readfile 12, labtalk 33; binio adds per-point vendor cross-checks when a real workstation export is present) and you can re-run them yourself; the 1139-case bank holds prompts and synthetic data, so it stays a development-side asset and is not distributed.
+- **612 shipped checks, not a claim.** Eight Origin-free suites (asciiio 137, binio 26, lifecycle 115, paths 35, json 43, readfile 12, labtalk 33, evidence 41) plus two real-Origin suites (smoke 129, edge 41) **ship inside the package and you can re-run every one of them**; `check_claims.py` re-measures them and holds every number in this README to the measurement. The 0.4.20 numbers all come from actual runs: 442 offline checks on an interpreter **without Origin**, smoke and edge on a real OriginPro 2024 + originpro 1.1.15 (**129/129, 41/41** — and the edge case "the shipped launcher can start the server" was RED on the 0.4.19 tree). A **1139-case full-chain bank** also exists as a development-side asset (`cases/` + `run_cases.py`, prompts and synthetic data, not distributed); it was last fully green in the 0.4.19 round and **was not re-run for this version** because it lives outside this repository — every regression added here landed in the shipped suites above instead. originpro's dozen-plus documented traps are all recorded and worked around.
 
 ## What it can do
 
@@ -102,6 +104,12 @@ Two failure modes behave differently (measured, do not guess):
 
 Origin not running does **not** affect registration: the COM connection is built on the first tool call.
 
+> **The `python` on PATH may be the Windows Store alias.** It is a 0-byte app-execution alias that exits 9009 and shadows the real interpreter, which is exactly the "no tools registered, no error" symptom above. After installing, run the shipped self-check:
+> ```powershell
+> node "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-origin-bridge\bin\origin-bridge.mjs" --check
+> ```
+> It prints the interpreter it picked, whether `server.py` is readable, and whether `numpy` / `originpro` import (a missing `originpro` only warns — the tools still register). If it picks the wrong one, `setx ORIGIN_BRIDGE_PYTHON "<real interpreter>"` and fully restart dsh.
+
 If the dependencies live in a venv, or you use a different profile, set these user environment variables (then reopen the terminal and fully restart dsh):
 
 ```powershell
@@ -113,7 +121,7 @@ Fully quit dsh and reopen; in a new chat say "list tools whose names contain ori
 
 ### Any other stdio MCP client (Claude Desktop, Cursor, Codex…)
 
-`npm install dsh-origin-bridge` ships a launcher at `bin/origin-bridge.mjs`. Point your client's `command` at it (or at `node_modules/dsh-origin-bridge/bin/origin-bridge.mjs`), keep `serverName: origin_bridge`, and the tool names are `mcp__origin_bridge__origin_*`. The launcher picks the interpreter from `ORIGIN_BRIDGE_PYTHON`, then a `.venv` next to the package, then `python` on PATH — and exits with a one-line error instead of a stack trace if none can be spawned.
+`npm install dsh-origin-bridge` ships a launcher at `bin/origin-bridge.mjs`. Point your client's `command` at it (or at `node_modules/dsh-origin-bridge/bin/origin-bridge.mjs`), keep `serverName: origin_bridge`, and the tool names are `mcp__origin_bridge__origin_*`. The launcher probes every candidate in turn — `ORIGIN_BRIDGE_PYTHON`, then a `.venv` next to the package, then **each** `python`/`python3` on PATH (a Windows Store "app execution alias" is 0 bytes and exits 9009; it used to shadow the real interpreter and kill the server with no message) — and spawns the first one that actually reports a version. Run `node bin/origin-bridge.mjs --check` to see which interpreter it picked and whether `numpy` / `originpro` import (a missing `originpro` only warns: the tools still register and answer `missing_originpro`). When nothing works it prints every candidate with its reason and how to fix it, instead of a stack trace or a bare exit code.
 
 ### From source (to run tests or hack)
 
@@ -129,11 +137,12 @@ The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py              # 129 checks, needs Origin
 .\.venv\Scripts\python.exe edge_checks.py             # 41 checks, needs Origin
-.\.venv\Scripts\python.exe test_asciiio.py            # 84 checks, Origin-free
-.\.venv\Scripts\python.exe test_binio.py              # 15 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
+.\.venv\Scripts\python.exe test_asciiio.py            # 137 checks, Origin-free
+.\.venv\Scripts\python.exe test_binio.py              # 26 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
 .\.venv\Scripts\python.exe test_lifecycle.py          # 115 checks, Origin-free
+.\.venv\Scripts\python.exe test_evidence.py           # 41 checks, Origin-free: a stale file is not evidence, freshness of the '#'-renamed candidate, empty names on close_pages, no ownership claimed when the probe failed
 .\.venv\Scripts\python.exe test_paths.py              # 35 checks, Origin-free
-.\.venv\Scripts\python.exe test_json_safety.py        # 29 checks, Origin-free
+.\.venv\Scripts\python.exe test_json_safety.py        # 43 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free
 .\.venv\Scripts\python.exe test_labtalk_guard.py      # 33 checks, Origin-free
 .\.venv\Scripts\python.exe check_claims.py            # re-measures the suites and holds the README counts to them (CI runs it too)
@@ -205,6 +214,10 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 | `bad_path` / `target_locked` | The path is wrong (directory as filename, unmapped drive) or the target exists read-only; the bridge will not overwrite |
 | `origin_busy` | Another bridge session holds Origin (lock at `%LOCALAPPDATA%\origin-bridge\session.lock`). Wait for it, or delete the lock file if it is wedged |
 | Install fails `ERR_PNPM_NO_MATCHING_VERSION` | Mirror lag: add `--registry=https://registry.npmjs.org/` once, or use a `file:` offline bundle |
+| `export_unverified` / `save_unverified` | Origin said success but the target file did not change — usually because a **previous** figure/project already sits at that path. Use a new name (a timestamp is easiest) or delete the old file; it may also be open in an image viewer, Origin, or a sync client and refused an overwrite |
+| `origin_instances` reports `ownership: "uncertain"` | The pre-connect process probe failed (powershell blocked by AV, or timed out), so this session claims **no** instances and `origin_exit` answers `foreign_instance`. If you know the instance is the bridge's own, `origin_exit(force=true)`; a fresh dsh with a working probe clears it |
+| `origin_close_pages(names=[])` closed nothing | Intended: an empty list means "nothing selected". Omit `names` to close every page of that kind, and check `dry_run: true` / `would_close` first |
+| Interpreter not found / `origin-bridge` dies at once (9009) | The first `python` on PATH is often the Windows Store app-execution alias (0 bytes, exits 9009) shadowing the real one. Run `node bin/origin-bridge.mjs --check` to see what it picked and whether `numpy` / `originpro` import, then `setx ORIGIN_BRIDGE_PYTHON "<real interpreter>"`. Same for dsh: `cordis.patch.yml` defaults to `python` on PATH |
 
 The [Chinese README](README.md) also carries a maintainer table of **30+ measured originpro/Origin traps** (silent no-ops, the real `plotxy` codes, `set_formula`'s actual 0-based index, COM thread affinity, the missing-value sentinel, the export filter rewriting `#`…) — if you maintain anything that drives Origin from Python, read it.
 

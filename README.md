@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>612 项随包检查全部实测通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>27 个工具 · <b>614 项随包检查全部实测通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-612%2F612%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-614%2F614%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -41,7 +41,7 @@
 2. **不谎报成功。** 写操作要么读回证据，要么明确失败/降级；`unknown` 就说 `unknown`，绝不把"请求发出去了"当成"事情做成了"。
 3. **生命周期 fail-closed。** 会话锁、实例归属、退出、超时：拿不准就拒绝或如实报告，不猜、不静默重试写操作、不杀归属不明的进程。
 4. **不碰用户的东西。** 有窗口的 Origin 永远不动；只读文件不覆盖；测试数据与提示词不上传、不进包。
-5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 **612 项**离线/边界检查，任何人都能复跑。
+5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 **614 项**离线/边界检查，任何人都能复跑。
 
 **明确的非目标**：工具数量竞赛、云端渲染、改写 Origin 本身。单 COM worker 是当前的有意选择——除非实测证明它隔离不了，否则不引入多 worker 的复杂度。
 
@@ -58,7 +58,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **612 项随包检查，不是自称。** 八个离线套件（asciiio 137、binio 26、lifecycle 115、paths 35、json 43、readfile 12、labtalk 33、evidence 41）加两个真机套件（smoke 129、edge 41）**随包发布，你可以直接复跑**，本文里每一个数字都由 `check_claims.py` 重新跑一遍再对账。0.4.20 这一版的数字全部来自实际运行：离线 442 项在**没有 Origin** 的解释器上跑，smoke 与 edge 在装好的 OriginPro 2024 + originpro 1.1.15 上跑（**129/129、41/41**，其中 edge 里"随包启动器能拉起 server"这一条在 0.4.19 的机器上是红的）。另有开发侧资产一套 **1139 例全链路题库**（`cases/` + `run_cases.py`，含提示词与模拟数据，不随包分发）——它最后一次全绿是 0.4.19 那一轮；**本版没有复跑它**，因为它在仓库之外，本版所有新增回归都落在上面那两个随包套件里。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **614 项随包检查，不是自称。** 八个离线套件（asciiio 137、binio 26、lifecycle 115、paths 35、json 45、readfile 12、labtalk 33、evidence 41）加两个真机套件（smoke 129、edge 41）**随包发布，你可以直接复跑**，本文里每一个数字都由 `check_claims.py` 重新跑一遍再对账。这一版的数字全部来自实际运行：离线 444 项在**没有 Origin** 的解释器上跑，smoke 与 edge 在装好的 OriginPro 2024 + originpro 1.1.15 上跑（**129/129、41/41**，其中 edge 里"随包启动器能拉起 server"这一条在 0.4.19 的机器上是红的）。另有开发侧资产一套 **1139 例全链路题库**（`cases/` + `run_cases.py`，含提示词与模拟数据，不随包分发）——它最后一次全绿是 0.4.19 那一轮；**本版没有复跑它**，因为它在仓库之外，本版所有新增回归都落在上面那两个随包套件里。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -166,7 +166,7 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
 ```
 
-上面这 612 项随包发布，你可以自己复跑。那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；它的最后一次全绿是 0.4.19 那轮，**0.4.20 没有复跑它**（不在本仓库里）。这一版的所有数字都是上面那两组套件的实际运行结果。
+上面这 614 项随包发布，你可以自己复跑。那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；它的最后一次全绿是 0.4.19 那轮，此后没有再复跑过它（不在本仓库里）。这一版的所有数字都是上面那两组套件的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -365,7 +365,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 612 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 614 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 

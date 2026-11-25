@@ -10,6 +10,15 @@ import math
 import os
 import sys
 
+# 控制台代码页不是我们能选的：中文 Windows 默认 cp936、西文 cp1252，而检查标签里
+# 有 µ、°、≤ 和中文。一条检查都还没跑就 UnicodeEncodeError，等于把"你可以自己复跑"
+# 这条路堵死——所以先把两个输出流设成"写不出来的字符用 ? 代替"，而不是崩。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab as ol  # noqa: E402
 
@@ -258,6 +267,23 @@ def main():
     ok("--tools still lists exactly 27 tools",
        len([ln for ln in decoded.splitlines() if ln.strip()]) == 27,
        len(decoded.splitlines()))
+
+    # ------------------------------------------------ suites survive a legacy console
+    # The suites print µ / ° / 中文 in their labels. A zh-CN Windows console is cp936,
+    # so `python test_asciiio.py` -- the exact command both READMEs tell people to
+    # run -- died with UnicodeEncodeError on the FIRST check and exited 1, which
+    # reads as "the shipped checks are broken". Measured on 0.4.19 and 0.4.20 alike:
+    # 'gbk' codec can't encode character '\xb5'. Every suite now relaxes its own
+    # stdout/stderr, so the documented command works on the default console.
+    env_cp = dict(env, PYTHONIOENCODING="cp936")
+    env_cp.pop("PYTHONUTF8", None)
+    suite = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_asciiio.py")
+    proc5 = subprocess.run([sys.executable, suite], capture_output=True, env=env_cp, timeout=600)
+    tail5 = proc5.stdout.decode("utf-8", "replace").strip().splitlines()
+    ok("a suite that prints µ runs on a cp936 console", proc5.returncode == 0,
+       proc5.stderr.decode("utf-8", "replace")[-200:])
+    ok("and still reports its result there",
+       bool(tail5) and "asciiio checks passed" in tail5[-1], tail5[-1] if tail5 else "")
 
     print("\n%d/%d json-safety checks passed" % (PASSED, PASSED + len(FAILED)))
     if FAILED:

@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 tools · <b>612/612 shipped checks passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
+  <sub>27 tools · <b>614/614 shipped checks passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
 </p>
 
 <p align="center">
   <a href="#requirements"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-612%2F612%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-614%2F614%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -33,7 +33,7 @@ Not "the Origin MCP with the most tools" — the one you can trust on real lab d
 2. **Never report success it cannot prove.** A write either reads evidence back or fails/degrades honestly; `unknown` stays `unknown`. "The request was sent" is never treated as "the thing was done".
 3. **Fail closed on lifecycle.** Session lock, instance ownership, exit, timeouts: when in doubt, refuse or report — never guess, never silently replay a write, never kill an instance whose ownership is unproven.
 4. **Never touch what is the user's.** A windowed Origin is never killed; read-only files are never overwritten; test data and prompts are never uploaded or shipped.
-5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and **612** offline/edge checks ship inside the package for anyone to re-run.
+5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and **614** offline/edge checks ship inside the package for anyone to re-run.
 
 **Explicit non-goals:** a tool-count race, cloud rendering, rewriting Origin itself. A single COM worker is a deliberate choice — no multi-worker complexity unless measurement proves COM cannot be isolated.
 
@@ -50,7 +50,7 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
 - **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **612 shipped checks, not a claim.** Eight Origin-free suites (asciiio 137, binio 26, lifecycle 115, paths 35, json 43, readfile 12, labtalk 33, evidence 41) plus two real-Origin suites (smoke 129, edge 41) **ship inside the package and you can re-run every one of them**; `check_claims.py` re-measures them and holds every number in this README to the measurement. The 0.4.20 numbers all come from actual runs: 442 offline checks on an interpreter **without Origin**, smoke and edge on a real OriginPro 2024 + originpro 1.1.15 (**129/129, 41/41** — and the edge case "the shipped launcher can start the server" was RED on the 0.4.19 tree). A **1139-case full-chain bank** also exists as a development-side asset (`cases/` + `run_cases.py`, prompts and synthetic data, not distributed); it was last fully green in the 0.4.19 round and **was not re-run for this version** because it lives outside this repository — every regression added here landed in the shipped suites above instead. originpro's dozen-plus documented traps are all recorded and worked around.
+- **614 shipped checks, not a claim.** Eight Origin-free suites (asciiio 137, binio 26, lifecycle 115, paths 35, json 45, readfile 12, labtalk 33, evidence 41) plus two real-Origin suites (smoke 129, edge 41) **ship inside the package and you can re-run every one of them**; `check_claims.py` re-measures them and holds every number in this README to the measurement. The numbers here all come from actual runs: 444 offline checks on an interpreter **without Origin**, smoke and edge on a real OriginPro 2024 + originpro 1.1.15 (**129/129, 41/41** — and the edge case "the shipped launcher can start the server" was RED on the 0.4.19 tree). A **1139-case full-chain bank** also exists as a development-side asset (`cases/` + `run_cases.py`, prompts and synthetic data, not distributed); it was last fully green in the 0.4.19 round and has not been re-run since because it lives outside this repository — every regression added here landed in the shipped suites above instead. originpro's dozen-plus documented traps are all recorded and worked around.
 
 ## What it can do
 

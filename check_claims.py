@@ -18,6 +18,15 @@ import re
 import subprocess
 import sys
 
+# 控制台代码页不是我们能选的：中文 Windows 默认 cp936、西文 cp1252，而检查标签里
+# 有 µ、°、≤ 和中文。一条检查都还没跑就 UnicodeEncodeError，等于把"你可以自己复跑"
+# 这条路堵死——所以先把两个输出流设成"写不出来的字符用 ? 代替"，而不是崩。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUITES = ["test_asciiio", "test_binio", "test_lifecycle", "test_paths",
           "test_json_safety", "test_readfile", "test_labtalk_guard", "test_evidence"]

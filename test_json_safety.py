@@ -151,8 +151,85 @@ def main():
     ok("boolean is not an integer",
        code_for("origin_export", {"width": True}) == "bad_arguments")
     ok("valid args pass", code_for("origin_import", {"path": "x.csv"}) == "no-raise")
-    ok("extra keys are tolerated",
-       code_for("origin_import", {"path": "x.csv", "bogus": 1}) == "no-raise")
+    # An unrecognised key is refused instead of being swallowed: measured, a model
+    # sending {"colour": "#fff", "xscale": "log"} to origin_style was accepted and
+    # changed nothing at all, which looks like a successful call.
+    ok("unknown key -> unknown_arguments",
+       code_for("origin_import", {"path": "x.csv", "bogus": 1}) == "unknown_arguments")
+    ok("misspelled style key is refused",
+       code_for("origin_style", {"graph": "gr-1", "colour": "#fff"}) == "unknown_arguments")
+    ok("every tool sets additionalProperties=false",
+       all((t["inputSchema"] or {}).get("additionalProperties") is False for t in srv.TOOLS),
+       [t["name"] for t in srv.TOOLS
+        if (t["inputSchema"] or {}).get("additionalProperties") is not False])
+
+    # ------------------------------------------------ schema enums vs the engine
+    # Two hand-typed lists drifted: the engine accepted gaussian / nlfit /
+    # natural_log / workbook / tiff / jpeg while the schemas did not list them. The
+    # enums are now derived from the engine's own tables, and this checks it.
+    import originlab as engine
+
+    def enum_of(tool, key):
+        spec = (srv._BY_NAME[tool]["inputSchema"]["properties"] or {}).get(key) or {}
+        return set(spec.get("enum") or ())
+
+    ok("fit kinds cover every preset plus the two modes",
+       set(engine.FIT_PRESETS) | {"linear", "nlfitsing", "nlfit"}
+       <= enum_of("origin_fit", "kind"), sorted(enum_of("origin_fit", "kind")))
+    ok("axis scale names cover SCALE_TYPES",
+       set(engine.SCALE_TYPES) <= enum_of("origin_style", "x_scale"),
+       sorted(enum_of("origin_style", "x_scale")))
+    ok("page kinds cover PAGE_KINDS",
+       set(engine.PAGE_KINDS) <= enum_of("origin_close_pages", "kind"),
+       sorted(enum_of("origin_close_pages", "kind")))
+    ok("plot types cover PLOT_CODES",
+       set(engine.PLOT_CODES) == enum_of("origin_plot", "plot_type"),
+       sorted(enum_of("origin_plot", "plot_type")))
+    ok("image formats include the tiff/jpeg aliases the engine accepts",
+       {"tiff", "jpeg"} <= enum_of("origin_export", "fmt"),
+       sorted(enum_of("origin_export", "fmt")))
+    ok("data formats cover _DATA_FMTS",
+       set(engine._DATA_FMTS) == enum_of("origin_read_sheet", "fmt"),
+       sorted(enum_of("origin_read_sheet", "fmt")))
+    ok("encodings cover _DATA_ENCODINGS",
+       set(engine._DATA_ENCODINGS) == enum_of("origin_read_sheet", "encoding"),
+       sorted(enum_of("origin_read_sheet", "encoding")))
+
+    # -------------------------------- schema properties vs the engine's signatures
+    # A parameter the schema declares but the engine will not accept (or the other way
+    # round) is invisible drift: the model can never use it, or is always refused.
+    import inspect
+
+    SIGNATURES = {
+        "origin_status": "status", "origin_import": "import_file",
+        "origin_read_file": "read_file", "origin_read_sheet": "read_sheet",
+        "origin_write": None, "origin_formula": "column_formula",
+        "origin_plot": "plot", "origin_style": "style", "origin_annotate": "annotate",
+        "origin_legend": "legend_entries", "origin_layer": "add_layer",
+        "origin_matrix": "matrix_plot", "origin_fit": "fit", "origin_export": None,
+        "origin_view": "view", "origin_save_project": "save_project",
+        "origin_open": "open_project", "origin_inspect": "inspect",
+        "origin_close_pages": "close_pages", "origin_labtalk": "labtalk",
+        "origin_exit": "exit_origin", "origin_instances": "instances",
+        "origin_reclaim": "reclaim", "origin_figure": "figure",
+        "origin_chart_presets": "chart_presets", "origin_chart_preset": "chart_preset",
+        "origin_chart_check": "chart_check", "origin_chart_render": "chart_render",
+    }
+    drift = []
+    for tool, fn_name in SIGNATURES.items():
+        if fn_name is None:
+            continue
+        fn = getattr(engine, fn_name)
+        params = set(inspect.signature(fn).parameters)
+        # Underscore-prefixed parameters are internal switches (reclaim's _detach),
+        # not part of the model-facing contract.
+        params = {p for p in params if not p.startswith("_")}
+        declared = set((srv._BY_NAME[tool]["inputSchema"]["properties"] or {}))
+        if not declared <= params:
+            drift.append("%s: schema declares %s" % (tool, sorted(declared - params)))
+        if not params <= declared:
+            drift.append("%s: engine accepts %s" % (tool, sorted(params - declared)))
+    ok("every schema property maps onto an engine parameter (and back)", drift == [], drift)
 
     # ------------------------------------------------ unknown tool / method
     # A model hallucinating a tool name gets a named, actionable error — not a
@@ -264,8 +341,8 @@ def main():
        proc4.stderr.decode("utf-8", "replace")[-160:])
     ok("--tools output is UTF-8 regardless of the console",
        utf8_ok is True and "origin_status" in decoded, utf8_ok)
-    ok("--tools still lists exactly 27 tools",
-       len([ln for ln in decoded.splitlines() if ln.strip()]) == 27,
+    ok("--tools still lists exactly 28 tools",
+       len([ln for ln in decoded.splitlines() if ln.strip()]) == 28,
        len(decoded.splitlines()))
 
     # ------------------------------------------------ suites survive a legacy console

@@ -30,6 +30,27 @@ SERVER_VERSION = "0.4.21"
 PROTOCOL = "2024-11-05"
 
 
+def _enum(*values):
+    return sorted({str(v) for v in values if v is not None and str(v) != ""})
+
+
+# Every enum below is DERIVED from the engine's own tables instead of being typed
+# out a second time. Measured drift in 0.4.21: the engine accepted `gaussian`,
+# `nlfit`, `natural_log`, `workbook`, `tiff`, `jpeg` while the schemas did not list
+# them, so a model that used a legitimate value was refused, and a model that used a
+# schema-listed value the engine rejected got an engine error. Two lists, one truth.
+_FIT_KINDS = _enum("linear", "nlfitsing", "nlfit", *originlab.FIT_PRESETS)
+_SCALE_NAMES = _enum(*list(originlab.SCALE_TYPES) + list(originlab.SCALE_NAMES.values()))
+_PAGE_KINDS = _enum(*originlab.PAGE_KINDS)
+_IMAGE_FMTS = _enum("png", "tif", "tiff", "jpg", "jpeg", "svg", "pdf", "emf")
+_DATA_FMTS = _enum(*originlab._DATA_FMTS)
+_DATA_ENCODINGS = _enum(*originlab._DATA_ENCODINGS)
+_PLOT_TYPES = _enum(*originlab.PLOT_CODES)
+_LAYER_TYPES = _enum(*originlab.LAYER_TYPES)
+_LEGEND_POSITIONS = _enum(*originlab.LEGEND_POSITIONS)
+_MATRIX_TEMPLATES = _enum(*originlab.MATRIX_TEMPLATES)
+
+
 def _write(a):
     if a.get("rows"):
         return originlab.write_block(a.get("headers") or [], a["rows"], a.get("book_name", ""))
@@ -96,7 +117,7 @@ TOOLS = [
                 "x": {"type": ["integer", "string"], "default": 1},
                 "y": {"type": ["integer", "string", "array"], "default": 2,
                       "description": "列号/列名，或列表 [2,3,4] 一次画多条"},
-                "plot_type": {"type": "string", "enum": ["line", "scatter", "line_symbol", "column"], "default": "line"},
+                "plot_type": {"type": "string", "enum": _PLOT_TYPES, "default": "line"},
                 "graph_name": {"type": "string"},
                 "title": {"type": "string", "description": "图层标题"},
                 "graph": {"type": "string", "description": "已有图页句柄；配合 layer 往该层加曲线"},
@@ -124,6 +145,30 @@ TOOLS = [
         "run": lambda a: originlab.read_file(a["path"], a.get("comment")),
     },
     {
+        "name": "origin_read_sheet",
+        "description": "把 Origin 工作表里的数据读回来（这是 import 的反向）：返回每列的长名/单位/显示格式/类型（numeric、text、mixed、empty）/有效行数，以及前 rows 个值（缺值为 null）。import、write、formula 之后想确认「到底写进去了什么」，或者 open 了别人的 .opju 想知道里面是什么数据，用它。给 path 就把整张表写成 csv/tsv/txt 并回读核对（表头、行数、每行格数、抽查格子），返回字节数与 sha256。实测限制：带显示格式的列导出的是 Origin 原始数值（日期是序列号，45292.0 = 2024-01-01），屏幕上的那段文字只在前 3 行的 sample_display 里；Origin 自带的 expASC 走不通（lt_exec 一律返回 False 且不落盘），文件是桥自己写的。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worksheet": {"type": "string", "description": "工作表句柄（origin_import / origin_write 返回的那个）"},
+                "rows": {"type": "integer", "default": 20,
+                         "description": "回传多少行的值，1–200；要全部数据请用 path 导出"},
+                "columns": {"type": "array", "description": "只读这几列：1 起始列号或列名；省略=全部"},
+                "path": {"type": "string", "description": "可选：把整张表写到这里（扩展名按 fmt 自动修）"},
+                "fmt": {"type": "string", "enum": _DATA_FMTS, "default": "csv"},
+                "encoding": {"type": "string",
+                             "enum": _DATA_ENCODINGS,
+                             "default": "utf-8-sig",
+                             "description": "默认带 BOM 的 UTF-8，中文 Windows 上 Excel 双击打开不乱码"},
+            },
+            "required": ["worksheet"],
+        },
+        "run": lambda a: originlab.read_sheet(a["worksheet"], a.get("rows", 20),
+                                              a.get("columns") or [], a.get("path", ""),
+                                              a.get("fmt", "csv"),
+                                              a.get("encoding", "utf-8-sig")),
+    },
+    {
         "name": "origin_style",
         "description": "改图并逐项读回验证：轴标题、对数轴、坐标范围与步长、逐曲线颜色/线宽/符号形状/符号大小/填充/透明度。读不回来的项会进 failed 列表，不会假装成功。",
         "inputSchema": {
@@ -134,12 +179,8 @@ TOOLS = [
                 "series": {"type": "integer", "default": 0, "description": "该层里的第几条曲线，0 起"},
                 "x_title": {"type": "string"},
                 "y_title": {"type": "string"},
-                "x_scale": {"type": "string", "enum": ["linear", "log", "log10", "ln", "log2",
-                                                        "probit", "probability", "reciprocal",
-                                                        "offset_reciprocal", "logit"]},
-                "y_scale": {"type": "string", "enum": ["linear", "log", "log10", "ln", "log2",
-                                                        "probit", "probability", "reciprocal",
-                                                        "offset_reciprocal", "logit"]},
+                "x_scale": {"type": "string", "enum": _SCALE_NAMES},
+                "y_scale": {"type": "string", "enum": _SCALE_NAMES},
                 "xlim": {"type": "array", "description": "[from,to] 或 [from,to,step]"},
                 "ylim": {"type": "array", "description": "[from,to] 或 [from,to,step]"},
                 "xtick": {"type": "number", "description": "X 刻度步长"},
@@ -175,11 +216,7 @@ TOOLS = [
                 "worksheet": {"type": "string"},
                 "x": {"type": ["integer", "string"], "default": 1},
                 "y": {"type": ["integer", "string", "array"], "default": 2},
-                "kind": {"type": "string", "enum": ["linear", "nlfitsing", "gauss", "lorentz",
-                                                    "voigt", "expdec1", "expdec2", "sine", "power",
-                                                    "logistic", "boltzmann", "doseresp", "cubic",
-                                                    "poly3", "expdecay"],
-                         "default": "linear"},
+                "kind": {"type": "string", "enum": _FIT_KINDS, "default": "linear"},
                 "func": {"type": "string", "description": "Origin 内置函数名（区分大小写），如 Gauss / ExpDec1；给了 func 就按非线性拟合，不要写自定义表达式"},
                 "fixed": {"type": "object", "description": "固定参数 {参数名: 值}，如 {\"y0\": 0}"},
                 "starts": {"type": "object", "description": "初值 {参数名: 值}；linear 用 Slope/Intercept"},
@@ -204,7 +241,7 @@ TOOLS = [
             "properties": {
                 "graph": {"type": "string"},
                 "path": {"type": "string", "description": "输出文件绝对路径；all_graphs=true 时是目标目录（每个图页导成 <页名>.<fmt>）"},
-                "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
+                "fmt": {"type": "string", "enum": _IMAGE_FMTS,
                         "default": "png"},
                 "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
                 "all_graphs": {"type": "boolean", "default": False,
@@ -254,11 +291,11 @@ TOOLS = [
                 "columns": {"type": "object", "description": "内联数据 {列名: [值...]}，优先用 source"},
                 "x": {"type": ["integer", "string"], "default": 1},
                 "y": {"type": ["integer", "string", "array"], "default": 2},
-                "plot_type": {"type": "string", "enum": ["line", "scatter", "line_symbol", "column"], "default": "line"},
+                "plot_type": {"type": "string", "enum": _PLOT_TYPES, "default": "line"},
                 "title": {"type": "string"},
                 "x_title": {"type": "string"},
                 "y_title": {"type": "string"},
-                "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
+                "fmt": {"type": "string", "enum": _IMAGE_FMTS,
                         "default": "png"},
                 "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
                 "output_dir": {"type": "string", "description": "交付目录：图片 + opju 都写到这。不给则只建图、不落盘"},
@@ -347,10 +384,7 @@ TOOLS = [
                 "graph": {"type": "string", "description": "省略则用当前活动图页"},
                 "layer": {"type": "integer", "default": 0},
                 "entries": {"type": "array", "description": '["sin(x)","cos(x)"]；省略=用列长名自动生成'},
-                "position": {"type": "string", "enum": ["top_left", "top", "top_right", "left", "right",
-                                                        "bottom_left", "bottom", "bottom_right",
-                                                        "inside_top_left", "inside_top_right",
-                                                        "inside_bottom_left", "inside_bottom_right", "inside"]},
+                "position": {"type": "string", "enum": _LEGEND_POSITIONS},
                 "show": {"type": "boolean", "default": True},
             },
         },
@@ -365,8 +399,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "rows": {"type": "array", "description": "二维矩阵 [[...],[...]]，行=Y 方向、列=X 方向"},
-                "template": {"type": "string", "enum": ["heat_map", "cmap", "mesh", "contline",
-                                                        "contgray", "3d", "glwireface", "glwirefrm", "bar3d"],
+                "template": {"type": "string", "enum": _MATRIX_TEMPLATES,
                              "default": "heat_map"},
                 "book_name": {"type": "string"},
                 "graph_name": {"type": "string"},
@@ -403,11 +436,11 @@ TOOLS = [
     },
     {
         "name": "origin_chart_check",
-        "description": "拿数据列名对预设做 dry-run（不碰 Origin）：缺哪列、建议用什么拟合、默认轴标题是什么。渲染前先调它，能省一次失败。",
+        "description": "拿数据列名对预设做 dry-run（不碰 Origin）：逐列说清每个必需列匹配到了你哪一列、缺哪列、建议用什么拟合、默认轴标题是什么；也会检查内联数据的形状（文本列、0 行）。渲染前先调它，能省一次失败。列名对不上不代表数据不对——真要用这个预设，origin_chart_render 里用 x=/y= 显式指定列号即可。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
+                "name": {"type": "string", "description": "预设名，小写下划线写法（xrd / tg_dtg / bland_altman）"},
                 "data": {"type": ["string", "object", "array"], "description": "数据文件路径；也接受内联的 {列名:[值]} 或列名列表"},
                 "columns": {"type": "array", "description": "或者直接给列名列表"},
             },
@@ -417,30 +450,29 @@ TOOLS = [
     },
     {
         "name": "origin_chart_render",
-        "description": "按科研预设一步出图：读预设的轴标题/图类型 → 导入数据 → 画图 → 轴标题 → 图例 → 导出图片 + 保存 .opju。用户说“把这个做成 XPS 图”这类需求优先用它。轴要反向（如 XPS 结合能）时再调 origin_style 设 xlim=[高,低]。",
+        "description": "按科研预设一步出图：读预设的轴标题/图类型 → 导入数据 → 画图 → 轴标题 → 图例 → 导出图片 + 保存 .opju。用户说“把这个做成 XPS 图”这类需求优先用它。x/y 省略时按预设的必需列自动定位（所以文件列顺序和预设不一致也能画对），列名对不上时用 x=/y= 显式指定列号。实测限制：Origin 只有 line/scatter/line_symbol/column 四种图类型，预设要求 box/radar/sankey/3d 之类会明确报 preset_kind_unsupported 并指出该用哪个工具，不会假装画成折线；预设要双 Y 轴、误差棒、对数轴时这个工具只画主体，缺的部分写在 warnings 里。轴要反向（如 XPS 结合能）时再调 origin_style 设 xlim=[高,低]。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
+                "name": {"type": "string", "description": "预设名，小写下划线写法"},
                 "source": {"type": "string", "description": "数据文件路径"},
-                "columns": {"type": "object", "description": "或内联数据 {列名:[值]}"}
-                ,
-                "x": {"type": ["integer", "string"], "default": 1},
-                "y": {"type": ["integer", "string", "array"], "default": 2},
+                "columns": {"type": "object", "description": "或内联数据 {列名:[值]}"},
+                "x": {"type": ["integer", "string"], "description": "X 列（1 起始或列名）；省略=按预设的第一个必需列"},
+                "y": {"type": ["integer", "string"], "description": "Y 列；省略=按预设的第二个必需列"},
                 "output_dir": {"type": "string", "description": "交付目录；不给则只建图不落盘"},
                 "x_title": {"type": "string", "description": "覆盖预设的 X 轴标题"},
                 "y_title": {"type": "string"},
                 "title": {"type": "string"},
-                "plot_type": {"type": "string", "enum": ["line", "scatter", "line_symbol", "column"]},
+                "plot_type": {"type": "string", "enum": _PLOT_TYPES},
                 "with_legend": {"type": "boolean", "default": True},
-                "fmt": {"type": "string", "enum": ["png", "tif", "jpg", "jpeg", "svg", "pdf", "emf"],
+                "fmt": {"type": "string", "enum": _IMAGE_FMTS,
                         "default": "png"},
                 "width": {"type": "integer", "minimum": 100, "maximum": 12000, "default": 1600},
             },
             "required": ["name"],
         },
         "run": lambda a: originlab.chart_render(
-            a["name"], a.get("source", ""), a.get("columns"), a.get("x", 1), a.get("y", 2),
+            a["name"], a.get("source", ""), a.get("columns"), a.get("x"), a.get("y"),
             a.get("output_dir", ""), a.get("x_title"), a.get("y_title"), a.get("title"),
             a.get("plot_type"), a.get("with_legend", True), a.get("fmt", "png"),
             a.get("width", 1600)),
@@ -451,7 +483,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["graph", "worksheet", "matrix", "notes"], "default": "graph"},
+                "kind": {"type": "string", "enum": _PAGE_KINDS, "default": "graph"},
                 "names": {"type": "array", "description": '只关这些页面 ["Graph1","Book2"]；省略=该类型全部'},
                 "dry_run": {"type": "boolean", "default": False},
             },
@@ -489,6 +521,16 @@ TOOLS = [
 ]
 
 _BY_NAME = {t["name"]: t for t in TOOLS}
+
+# Every tool declares its whole surface. Without this, a model that writes
+# `{"colour": "#fff", "xscale": "log"}` got the call accepted, the engine read
+# `color`/`x_scale` (absent), and NOTHING happened — the answer looked like success
+# while the request was silently ignored. Measured on origin_style. Declaring it in
+# the schema is also what a client sees, so the contract and the check agree.
+for _tool in TOOLS:
+    _schema = _tool.get("inputSchema")
+    if isinstance(_schema, dict):
+        _schema.setdefault("additionalProperties", False)
 
 
 def _log(msg):
@@ -613,6 +655,19 @@ def _validate_args(name, args, schema):
     """
     props = (schema or {}).get("properties") or {}
     problems = []
+    unknown = [k for k in args if k not in props]
+    if unknown:
+        # An unrecognised key used to pass silently: the engine read its own names,
+        # found nothing, and did nothing. Measured: {"colour": "#fff", "xscale":
+        # "log"} on origin_style was accepted and changed no styling at all, which
+        # reads as a successful call.
+        raise originlab.OriginError(
+            "unknown_arguments",
+            "%s 不认识这些参数：%s（可用的：%s）"
+            % (name, ", ".join(sorted(str(k) for k in unknown)),
+               ", ".join(sorted(props)) or "无"),
+            ["按工具的 inputSchema 用准确的参数名；拼错的键不会生效",
+             "%s 列出全部工具与参数" % "python server.py --tools"])
     for key, spec in props.items():
         if key not in args:
             continue

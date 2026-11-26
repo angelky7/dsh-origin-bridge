@@ -11,7 +11,9 @@ forth is the most common source of silent failures.
 """
 
 import atexit
+import csv
 import gc
+import hashlib
 import json
 import math
 import os
@@ -158,11 +160,27 @@ def _worker():
 
 
 def _dismiss_all_busy_dialogs():
-    """Click the busy box on every Origin instance; returns dismissed titles."""
+    """Click the busy box on every Origin instance; returns dismissed titles.
+
+    Never raises. This runs on the timeout path inside call(), where an exception
+    here would replace the `com_timeout` diagnosis the user actually needs with an
+    unrelated OSError (measured: `EnumWindows failed` did exactly that). A failed
+    probe means "no dialogs seen", which for a sweep is the safe direction — but the
+    reason is kept in _probe_notes so a tool can still explain itself.
+    """
     titles = []
-    rows = _process_rows()
-    for row in rows or []:
-        titles.extend(_dismiss_busy_dialogs(row["pid"]))
+    try:
+        rows = _process_rows()
+        if rows is None:
+            _trace_probe("busy-dialog sweep skipped: the process table is unavailable")
+            return titles
+        for row in rows:
+            try:
+                titles.extend(_dismiss_busy_dialogs(row["pid"]))
+            except Exception as exc:  # noqa: BLE001
+                _trace_probe("busy-dialog sweep failed on pid %s: %r" % (row.get("pid"), exc))
+    except Exception as exc:  # noqa: BLE001
+        _trace_probe("busy-dialog sweep failed: %r" % (exc,))
     return titles
 
 
@@ -436,6 +454,15 @@ _ownership_uncertain = False
 # next session must be able to tell "this orphan is ours from a previous run"
 # apart from "somebody else's background Origin". pid alone is not proof (pids
 # are reused); the pair (pid, process start time) is.
+#
+# Whether that record could be READ and WRITTEN is itself information: a silent {}
+# turns "I could not load my own history" into "these instances were never mine", so
+# reclaim reports them as unowned forever and origin_exit refuses them as
+# foreign_instance. Measured: an unwritable session dir dropped the record and the
+# bridge's own orphan then looked like a stranger's.
+_owned_state = ["missing"]
+
+
 def _owned_file():
     return os.path.join(_SESSION_DIR, "owned.json")
 
@@ -444,9 +471,17 @@ def _owned_load():
     try:
         with open(_owned_file(), encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        _owned_state[0] = "missing"
+        return {}
+    except OSError as exc:
+        _owned_state[0] = "unreadable: %s" % (exc.strerror or exc)
+        return {}
+    except ValueError as exc:
+        _owned_state[0] = "corrupt: %s" % exc
         return {}
     if not isinstance(data, dict):
+        _owned_state[0] = "corrupt: not an object"
         return {}
     out = {}
     for key, value in data.items():
@@ -455,18 +490,24 @@ def _owned_load():
                 out[int(key)] = value
         except (TypeError, ValueError):
             continue
+    _owned_state[0] = "ok" if out else "empty"
     return out
 
 
 def _owned_save(owned):
+    """Persist the ownership record; record (and report) a write failure."""
     try:
         os.makedirs(_SESSION_DIR, exist_ok=True)
         tmp = _owned_file() + ".%d.tmp" % os.getpid()
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({str(k): v for k, v in owned.items()}, fh)
         os.replace(tmp, _owned_file())
-    except OSError:
-        pass
+        _owned_state[0] = "ok" if owned else "empty"
+        return True
+    except OSError as exc:
+        _owned_state[0] = "unwritable: %s" % (exc.strerror or exc)
+        _trace_probe("ownership record could not be written: %r" % (exc,))
+        return False
 
 
 def _owned_record(rows):
@@ -497,6 +538,15 @@ def _row_owned(row, owned=None):
     return bool(row.get("started")) and owned.get(pid) == row["started"]
 
 
+def _trace_probe(msg):
+    """Remember why a probe failed, so the tool that gave up can say so."""
+    _probe_notes.append(str(msg)[:200])
+    del _probe_notes[:-4]
+
+
+_probe_notes = []
+
+
 def _process_rows():
     """List Origin64 processes as {pid, started, window}, or None if unknown.
 
@@ -508,25 +558,59 @@ def _process_rows():
     "there is nothing to reclaim", which is the one thing a caller must not be
     told when we could not actually look.
     """
+    del _probe_notes[:]
     if os.name != "nt":
         return []
-    script = ("Get-Process Origin64 -ErrorAction SilentlyContinue | ForEach-Object {"
+    # The sentinel matters: `Get-Process X -ErrorAction SilentlyContinue` sets $? to
+    # false when nothing matches, and powershell -Command then EXITS 1 with empty
+    # stdout — so "no Origin is running", the most common answer of all, is
+    # indistinguishable from "powershell itself failed" if you only look at the exit
+    # code. Measured 2026-11-26 on a machine with no Origin: rc=1, no stdout, no
+    # stderr. The script now ends with a marker and an explicit exit 0, so rc != 0 or
+    # a missing marker really does mean the probe could not run.
+    probe_ok = "__OB_PROBE_OK__"
+    script = ("$ErrorActionPreference='SilentlyContinue';"
+              "Get-Process Origin64 -ErrorAction SilentlyContinue | ForEach-Object {"
               "\"$($_.Id)|\" + $(try { $_.StartTime.ToString('o') } catch { '' }) + "
-              "\"|$($_.MainWindowHandle)\"}")
+              "\"|$($_.MainWindowHandle)\" };"
+              "Write-Output '%s'; exit 0" % probe_ok)
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
-                             capture_output=True, text=True, timeout=25).stdout
-    except Exception:
+        completed = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                                   capture_output=True, text=True, timeout=25)
+    except Exception as exc:  # noqa: BLE001
+        # Say WHY. A bare None here is the one answer that must stay explainable:
+        # everything downstream (ownership, reclaim, exit) turns on it.
+        _trace_probe("powershell could not be run: %r" % (exc,))
+        return None
+    out = completed.stdout or ""
+    if completed.returncode != 0:
+        _trace_probe("powershell exited %d: %s" % (completed.returncode,
+                                                   (completed.stderr or "").strip()[:200]))
+        return None
+    if probe_ok not in out:
+        # The script did not reach its last line: partial output, no conclusion.
+        _trace_probe("powershell did not finish the probe (no end marker); stderr: %s"
+                     % ((completed.stderr or "").strip()[:200],))
         return None
     rows = []
+    dropped = 0
     for line in out.splitlines():
-        parts = line.strip().split("|")
+        line = line.strip()
+        if not line or line == probe_ok:
+            continue
+        parts = line.split("|")
         if len(parts) != 3:
+            dropped += 1
             continue
         try:
             rows.append({"pid": int(parts[0]), "started": parts[1], "window": int(parts[2] or 0)})
         except ValueError:
-            continue
+            dropped += 1
+    if dropped:
+        # Output we could not parse means the table is not trustworthy as a whole:
+        # silently dropping a line would drop an instance from every downstream answer.
+        _trace_probe("%d unparsable line(s) in the process table" % dropped)
+        return None
     return rows
 
 
@@ -681,21 +765,31 @@ def instances():
     rows = _process_rows()
     if rows is None:
         return sanitize({"count": None, "probe": "unavailable",
-                         "error": "读不到进程表（powershell 不可用或超时），无法确定实例数量",
+                         "probe_detail": list(_probe_notes),
+                         "error": "读不到进程表（powershell 不可用、运行失败或超时），无法确定实例数量",
                          "next_actions": ["重试 origin_instances", "或在任务管理器里看 Origin64.exe"]})
     owned = _owned_load()
     for row in rows:
         row["foreground"] = bool(row["window"])
         row["ours"] = _row_owned(row, owned)
         row["busy_dialogs"] = [b["body"].replace("\n", " ")[:60] for b in _busy_dialogs(row["pid"])]
-    return sanitize({"count": len(rows), "probe": "ok",
-                     "background": [r for r in rows if not r["foreground"]],
-                     "foreground": [r for r in rows if r["foreground"]],
-                     "started_by_us": sorted(_started_pids),
-                     "ownership": "uncertain" if _ownership_uncertain else "ok",
-                     "ownership_note": (
-                         "连接前的进程探测失败过，本会话不认领任何实例（避免误关你自己开的 Origin）："
-                         "ours 只反映磁盘上 pid+启动时间的历史记录" if _ownership_uncertain else "")})
+    out = {"count": len(rows), "probe": "ok",
+           "background": [r for r in rows if not r["foreground"]],
+           "foreground": [r for r in rows if r["foreground"]],
+           "started_by_us": sorted(_started_pids),
+           "ownership": "uncertain" if _ownership_uncertain else "ok",
+           "ownership_note": (
+               "连接前的进程探测失败过，本会话不认领任何实例（避免误关你自己开的 Origin）："
+               "ours 只反映磁盘上 pid+启动时间的历史记录" if _ownership_uncertain else ""),
+           "ownership_record": _owned_state[0]}
+    if _owned_state[0] not in ("ok", "empty", "missing"):
+        # A record we could not read/write makes our own orphans look like strangers,
+        # so their `ours` flags below are not trustworthy. Say which way it broke.
+        out["ownership_note"] = ("归属记录（%s）的状态是 %s：ours 可能把本桥上一轮启动的实例"
+                                 "误报成别人的" % (_owned_file(), _owned_state[0]))
+        out["next_actions"] = ["确认 %s 可写后重试，或用 origin_reclaim(include_orphans=true) 明确关掉"
+                               % _SESSION_DIR]
+    return sanitize(out)
 
 
 def reclaim(close_background=True, include_orphans=False, _detach=True):
@@ -732,6 +826,7 @@ def reclaim(close_background=True, include_orphans=False, _detach=True):
         return sanitize({"closed": [], "force_closed": [], "stuck": [], "unverified": [],
                          "unowned": [], "left_running": [],
                          "probe": "unavailable",
+                         "probe_detail": list(_probe_notes),
                          "error": "读不到进程表，没有动任何进程",
                          "notify": "无法确认实例情况（进程探测失败），这次什么都没关。"})
     back = [r for r in rows if not r["window"]]
@@ -839,24 +934,42 @@ def _release_on_exit():
     lets the next session start against a half-closed Origin. Only instances
     THIS process started are touched: another bridge's on-disk record must not
     let a short-lived client kill a live session's Origin at interpreter exit.
+
+    Fail closed on the lock. Four measured ways the old code let go while the
+    instance was still there: the probe returned None, _close_pid answered
+    "stuck", _close_pid raised, or the probe answered [] (which the old
+    _process_rows could not tell from "no Origin on this machine"). Every one of
+    them dropped the lock in the `finally` — the exact opposite of its own
+    "cleanup first, lock last". Keeping the lock costs nothing if it goes wrong:
+    `_session_lock_acquire` takes over a dead owner's lock through a rename, so a
+    leftover lock file is a one-rename delay, not a permanent block.
     """
-    try:
-        if not _started_pids:
-            return
-        try:
-            rows = _process_rows()
-            if rows is None:
-                return  # cannot tell which pids are ours; leaving Origin is the safe error
-            _reset_connection_in_place()
-            for row in rows:
-                if row["window"]:
-                    continue
-                if row["pid"] in _started_pids:
-                    _close_pid(row["pid"], row.get("started", ""))
-        except Exception:
-            pass
-    finally:
+    remaining = set(_started_pids)
+    if not remaining:
         _session_lock_release()
+        return
+    try:
+        rows = _process_rows()
+        if rows is None:
+            return  # cannot tell which pids are ours: keep the lock, leave Origin
+        _reset_connection_in_place()
+        seen = {row["pid"] for row in rows}
+        # An instance that is not in the table any more is gone; stop counting it.
+        remaining &= seen
+        for row in rows:
+            if row["window"]:
+                continue
+            if row["pid"] not in _started_pids:
+                continue
+            verdict = _close_pid(row["pid"], row.get("started", ""))
+            if verdict in ("closed", "force_closed"):
+                remaining.discard(row["pid"])
+    except Exception:
+        # Cleanup did not finish: any pid still in `remaining` keeps the lock.
+        pass
+    finally:
+        if not remaining:
+            _session_lock_release()
 
 
 # ------------------------------------------------- cross-session Origin lock
@@ -893,14 +1006,24 @@ def _pid_alive(pid):
     k32 = ctypes.windll.kernel32
     handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
     if not handle:
-        return False
+        # ERROR_INVALID_PARAMETER (87) is the only "this pid does not exist" answer.
+        # Anything else — ERROR_ACCESS_DENIED (5) for a process owned by another
+        # elevated account, a service, or System — means we could not look. Returning
+        # False there said "dead" about a live session and let a second bridge take
+        # over the lock it held: measured, pid 4 (System) answered False while
+        # tasklist showed it running, and _session_lock_acquire() then reported no
+        # conflict and overwrote the lock file.
+        try:
+            return k32.GetLastError() != 87
+        except Exception:
+            return True
     # A TerminateProcess'd pid whose handles are still open (a test harness
     # holding the Popen) is a zombie: OpenProcess succeeds, so the exit code
     # decides liveness, not the handle.
     try:
         code = wt.DWORD()
         if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return False
+            return True          # could not read it: assume alive, never steal
         return code.value == STILL_ACTIVE
     finally:
         k32.CloseHandle(handle)
@@ -1053,14 +1176,27 @@ def _session_lock_acquire():
 
 
 def _session_lock_release():
+    """Give up the lock. Returns (ok, why) so the caller can say what happened.
+
+    Returning a bare False made a failure silent at all three call sites (the atexit
+    hook, exit_origin, edge checks). Measured: a lock left read-only stayed behind
+    holding OUR live pid, and the next session was told `origin_busy bridge_pid=…`
+    about a bridge that had already finished.
+    """
     state, held = _session_lock_read()
-    if state == "ok" and held.get("bridge_pid") == os.getpid():
-        try:
-            os.remove(_SESSION_LOCK)
-            return True
-        except OSError:
-            pass
-    return False
+    if state == "missing":
+        return True, ""              # nothing to release
+    if state in ("corrupt", "unreadable"):
+        # Not ours to reason about, and not ours to delete blindly either.
+        return False, "锁文件读不出来（%s），没有动它" % state
+    if held.get("bridge_pid") != os.getpid():
+        return False, "锁的持有者是 pid %s，不是本进程" % held.get("bridge_pid")
+    try:
+        os.remove(_SESSION_LOCK)
+        return True, ""
+    except OSError as exc:
+        return False, "删不掉 %s（%s）；下一个会话会被告知这里仍有桥在占用" % (
+            _SESSION_LOCK, exc.strerror or exc)
 
 
 atexit.register(_release_on_exit)
@@ -1286,11 +1422,21 @@ def _stamp(path):
     save-as onto a name used earlier), "the file is there" is true before Origin
     does anything — measured with a stubbed save_fig returning True and writing
     nothing: export() answered ok with the OLD file's bytes and dimensions.
+
+    "Not there" and "could not look" are different answers. A stat that fails for
+    any reason other than ENOENT raises: collapsing it into None made a file whose
+    stat was denied (EACCES, a filter driver, a network hiccup) read as
+    "Origin did not write it", and the user got `export_failed: Origin 说导出了但
+    文件不存在` about a file that was right there.
     """
     try:
         st = os.stat(path)
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise OriginError("io_error", "读不到文件状态（%s）：%s" % (exc.strerror or exc, path),
+                          ["确认路径还存在、没有被同步盘/杀软锁住",
+                           "换一个普通本地目录重试"])
     return (st.st_mtime_ns, st.st_size)
 
 
@@ -1325,14 +1471,85 @@ def _clean_component(part):
     return stripped if stripped else part
 
 
+_WIN_BAD = set('<>:"|?*')
+_RESERVED = {"CON", "PRN", "AUX", "NUL"} \
+    | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}
+_MAX_PATH = 259        # the classic Win32 limit, which Origin's writers also live under
+
+
+def _check_component(part, where):
+    """Refuse a path component Win32 cannot name. Measured 2026-11-26:
+    CreateFileW on '…\\a|b.png' fails with ERROR_INVALID_NAME (123) while
+    _prepare_write happily created the parent directory, so the failure surfaced
+    later as `export_failed: Origin 说导出了但文件不存在` — the diagnosis blamed
+    Origin for a path any Win32 writer refuses."""
+    bad = sorted({c for c in part if c in _WIN_BAD})
+    if bad:
+        raise OriginError("bad_path",
+                          "路径的%s里有 Windows 不允许的字符 %s：%r"
+                          % (where, " ".join(bad), part),
+                          ["这些字符 Win32 一律拒绝：< > : \" | ? *",
+                           "换掉它们再试（Origin 也会拒绝，不是桥的问题）"])
+    ctrl = sorted({c for c in part if ord(c) < 32})
+    if ctrl:
+        raise OriginError("bad_path", "路径的%s里有控制字符（码 %s）：%r"
+                          % (where, ", ".join(str(ord(c)) for c in ctrl), part),
+                          ["从文件名里去掉换行/制表等控制字符"])
+    stem = part.rstrip(" .").split(".")[0].strip().upper()
+    if stem in _RESERVED:
+        raise OriginError(
+            "bad_path",
+            "路径的%s用了 Windows 保留设备名 %s：%r" % (where, stem, part),
+            ["CON/PRN/AUX/NUL/COM1-9/LPT1-9 在多数 Windows 机器和网络盘上是设备而不是文件，"
+             "有的版本上写得出、有的上静默失败——换个名字（例如 report_NUL.png）",
+             "裸 NUL 尤其危险：写入成功但文件永远不出现"])
+
+
 def _norm_target(path, fmt=None):
-    """Absolute, expanduser'd, and normalised the way Windows will do it anyway."""
+    """Absolute, expanduser'd, and normalised the way Windows will do it anyway.
+
+    Also the place where a path is refused for being unwritable in principle. The
+    four write destinations all go through here, and every rule below is one that
+    otherwise turns into a misleading `export_failed` blaming Origin.
+    """
     raw = str(path or "").strip()
     if not raw:
         return ""
+    if raw.startswith("\\\\?\\"):
+        # Verbatim prefix: its whole point is to disable the normalisation below
+        # (trailing spaces and dots are real, ".." is not resolved) — and it can name
+        # devices. Measured: `\\\\?\\…\\a <sp>.png` was rewritten to `…\\a\\x.png`,
+        # i.e. onto a DIFFERENT file, which is the one thing a delivery path must
+        # never do silently.
+        raise OriginError("bad_path", "不接受 \\\\?\\ 长路径前缀：%r" % raw,
+                          ["给普通绝对路径；目录太深就缩短它（长度上限 %d）" % _MAX_PATH,
+                           "\\\\?\\ 会关闭尾部空格/点的规整，桥无法保证写到的就是你点的那个文件"])
+    if raw.startswith("\\\\.\\"):
+        raise OriginError("bad_path", "不接受 \\\\.\\ 设备路径：%r" % raw,
+                          ["那是设备命名空间（\\\\.\\NUL、\\\\.\\PhysicalDrive0…），不是文件",
+                           "给普通绝对路径，例如 D:\\out\\图.png"])
+    # Drive-relative forms hijack the destination: measured, 'c:d.png' abspath'd to
+    # C:\\<C drive current dir>\\d.png and wrote the file somewhere the user never
+    # named. This has to be checked BEFORE abspath, which does the resolving.
+    drive0, rest0 = os.path.splitdrive(raw)
+    if drive0 and rest0 and rest0[0] not in ("\\", "/"):
+        raise OriginError("bad_path", "这是盘符相对路径，落点取决于 C 盘当前目录：%r" % raw,
+                          ["给完整路径，例如 %s\\%s" % (drive0, os.path.basename(rest0)),
+                           "或去掉盘符，让它落在一个明确的目录里"])
     target = os.path.abspath(os.path.expanduser(raw))
     drive, rest = os.path.splitdrive(target)
-    target = drive + os.sep.join(_clean_component(p) for p in rest.split(os.sep))
+    pieces = rest.split(os.sep)
+    cleaned = []
+    for index, part in enumerate(pieces):
+        if part:
+            _check_component(part, "文件名" if index == len(pieces) - 1 else "目录")
+        cleaned.append(_clean_component(part) if part else part)
+    target = drive + os.sep.join(cleaned)
+    if len(target) > _MAX_PATH:
+        raise OriginError("bad_path", "路径太长（%d 字符，上限 %d）：%s"
+                          % (len(target), _MAX_PATH, target),
+                          ["把目录层级缩短或换个更短的文件夹名",
+                           "Win32 的经典上限是 259 字符，Origin 的写出器也受这个限制"])
     base = os.path.basename(target)
     if not base.split(".")[0].strip(" ."):
         raise OriginError("bad_path", "路径里没有真正的文件名：%r" % path,
@@ -1423,11 +1640,17 @@ def _written_or_mangled(target, since=None, not_before=None):
             i += 1
     rx = re.compile("^%s%s$" % ("".join(pattern), re.escape(ext)))
     try:
-        hits = [n for n in os.listdir(folder)
-                if rx.match(n) and _proof_of_write(os.path.join(folder, n),
-                                                   None, not_before)]
-    except OSError:
-        hits = []
+        names = os.listdir(folder)
+    except FileNotFoundError:
+        names = []                      # the folder is not there: nothing was written
+    except OSError as exc:
+        # Could not look. Reporting "Origin did not write it" here would be a guess
+        # with a misleading blame, so fail with the real reason.
+        raise OriginError("io_error", "列不出目录内容（%s）：%s"
+                          % (exc.strerror or exc, folder),
+                          ["确认目录还存在、没有被同步盘/杀软锁住"])
+    hits = [n for n in names
+            if rx.match(n) and _proof_of_write(os.path.join(folder, n), None, not_before)]
     if len(hits) != 1:
         return None, None
     cand = os.path.join(folder, hits[0])
@@ -1657,6 +1880,300 @@ def write_block(headers, rows, book_name=""):
     return call(run)
 
 
+# ------------------------------------------------- reading data back out
+#
+# Every other write path in this file puts data INTO Origin and reads a little of it
+# back as proof. There was no way to get the numbers OUT again: a sheet that arrived
+# by origin_import, was computed by origin_formula, or was opened from the user's own
+# .opju could only be inspected through column labels. That is the missing half of
+# import, and it is the one thing this release adds.
+#
+# Measured against originpro 1.1.15 / OriginPro 2024, because each of these decided
+# how the tool is built:
+#   * ws.to_list(col)  raw column values: float (nan for missing) or str. 3 x 20000
+#                      rows in 0.07 s, so a whole-sheet read is cheap.
+#   * ws.cell(r, c)    the DISPLAY text (what the user sees in Origin), ~0.4 ms per
+#                      call. Fine for a bounded sample, far too slow for a sheet.
+#   * expASC           Origin's own ASCII export CANNOT be driven from here: every
+#                      form of lt_exec('expASC path:="..."') returns False and writes
+#                      no file — the same lt_exec/string-assignment trap the LabTalk
+#                      section documents. So the bytes are written by this module.
+#   * as_date/as_time  ws.as_date(col, fmt) DESTROYS the column: measured, a numeric
+#                      column [45292.0, 45293.5, 45294.25] became [nan, nan, nan] and
+#                      its D label went empty. Never call them. Consequence: a date
+#                      column comes back as Origin's serial number (day 1 = 1900-01-01,
+#                      45292.0 = 2024-01-01), so this tool reports the display format
+#                      and says so rather than pretending the bare number is a date.
+_DATA_FMTS = {"csv": ",", "tsv": "\t", "txt": "\t"}
+_DATA_ENCODINGS = ("utf-8-sig", "utf-8", "gbk", "utf-16")
+_SHEET_SAMPLE_MAX = 200
+
+
+def _cell_text(value):
+    """One Origin value -> the text a data cell should carry.
+
+    Origin holds everything as a double or a string. Straight repr() turns a value
+    that is really an integer into "1.0" (and a missing value into "nan"); neither
+    is what the user sees in their own Origin window.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if value != value or value in (_INF, -_INF):
+            return ""
+        if float(value).is_integer() and abs(value) < 1e15:
+            return str(int(value))
+        return repr(value)
+    return str(value)
+
+
+def _column_kind(values):
+    """numeric / text / mixed / empty — decided from the values, not from a label."""
+    nums = sum(1 for v in values
+               if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v)
+    texts = sum(1 for v in values if isinstance(v, str) and v != "")
+    if not nums and not texts:
+        return "empty"
+    if nums and not texts:
+        return "numeric"
+    if texts and not nums:
+        return "text"
+    return "mixed"
+
+
+def _unique_headers(names, cols):
+    """Header names must be unique or a duplicated long name silently loses a column."""
+    out, seen, notes = [], {}, []
+    for i in range(cols):
+        given = names[i] if i < len(names) else ""
+        raw = str(given or "").strip() or "col%d" % (i + 1)
+        name = raw
+        if name in seen:
+            n = 2
+            while "%s_%d" % (raw, n) in seen:
+                n += 1
+            name = "%s_%d" % (raw, n)
+            notes.append("第 %d 列与前面的列同为 %r，表头改成 %r 以免两列互相覆盖"
+                         % (i + 1, raw, name))
+        seen[name] = True
+        out.append(name)
+    return out, notes
+
+
+def _check_data_file(target, encoding, delim, header, expected_rows, checkpoints):
+    """Re-read the file we just wrote and prove it holds what the sheet held.
+
+    Streaming on purpose: a 1M-row export must not cost a second copy in memory just
+    to verify. Only the header, the row count, every row's width and a few checkpoint
+    cells are compared, which is what catches a wrong delimiter, a lost column, an
+    off-by-one and a broken encoding.
+    """
+    problems = []
+    with open(target, "r", encoding=encoding, newline="") as fh:
+        reader = csv.reader(fh, delimiter=delim)
+        first = next(reader, None)
+        if first is None:
+            problems.append("文件是空的")
+        elif first != header:
+            problems.append("表头回读是 %r，写出时是 %r" % (first[:6], header[:6]))
+        count = 0
+        for row in reader:
+            if len(row) != len(header):
+                problems.append("第 %d 行有 %d 格，应为 %d" % (count + 2, len(row), len(header)))
+                break
+            for (ri, ci, text) in checkpoints:
+                if ri == count and row[ci] != text:
+                    problems.append("第 %d 行第 %d 列回读是 %r，内存里是 %r"
+                                    % (count + 2, ci + 1, row[ci], text))
+            count += 1
+    if count != expected_rows:
+        problems.append("数据行回读 %d 行，应为 %d" % (count, expected_rows))
+    return count, problems
+
+
+def read_sheet(worksheet, rows=20, columns=None, path="", fmt="csv", encoding="utf-8-sig"):
+    """Read a worksheet back: values inline, plus a data file on disk if asked.
+
+    The read side of import. `rows` bounds how many values come back inline (a whole
+    20000-row sheet does not belong in a tool result); `path` optionally writes the
+    FULL sheet out and the file is re-read to prove it. Column labels, units and
+    display formats come back with every column so the model can tell a numeric
+    column from a text one and a date from its serial number.
+    """
+    ws = _resolve("ws", worksheet)
+    if ws is None:
+        raise OriginError("worksheet_not_found", "工作表句柄无效：%s" % worksheet,
+                          ["origin_inspect 看当前页面",
+                           "重新 origin_import / origin_write 拿新句柄"])
+    fmt = str(fmt or "csv").lstrip(".").lower()
+    if fmt not in _DATA_FMTS:
+        raise OriginError("bad_format", "fmt 只支持 csv/tsv/txt，收到 %r" % (fmt,),
+                          ["要表格数据用 csv；制表符分隔用 tsv 或 txt"])
+    delim = _DATA_FMTS[fmt]
+    enc = str(encoding or "utf-8-sig").lower().strip()
+    if enc not in _DATA_ENCODINGS:
+        raise OriginError("bad_encoding", "encoding 只支持 %s，收到 %r"
+                          % ("/".join(_DATA_ENCODINGS), encoding),
+                          ["中文 Windows 上用 Excel 打开就用默认的 utf-8-sig"])
+    try:
+        want = int(rows)
+    except (TypeError, ValueError):
+        raise OriginError("bad_arguments", "rows 必须是正整数，收到 %r" % (rows,))
+    if want < 1:
+        raise OriginError("bad_arguments", "rows 至少为 1，收到 %d" % want)
+    if want > _SHEET_SAMPLE_MAX:
+        raise OriginError("bad_arguments", "rows 上限 %d，收到 %d" % (_SHEET_SAMPLE_MAX, want),
+                          ["要看全部数据就传 path 导出成文件，别把整张表塞进对话框"])
+
+    def run():
+        n_cols = int(_safe(lambda: ws.cols, 0) or 0)
+        if n_cols == 0:
+            raise OriginError("sheet_empty", "这张工作表没有任何列：%s"
+                              % (_safe(lambda: ws.name, "?"),),
+                              ["origin_inspect 看当前页面",
+                               "重新 origin_import / origin_write 拿新句柄"])
+        if columns:
+            idxs = [_col_index(ws, c) for c in columns]
+        else:
+            idxs = list(range(n_cols))
+
+        labels = [_safe(lambda i=i: str(ws.get_label(i, "L") or ""), "") for i in idxs]
+        units = [_safe(lambda i=i: str(ws.get_label(i, "U") or ""), "") for i in idxs]
+        display = [_safe(lambda i=i: str(ws.get_label(i, "D") or ""), "") for i in idxs]
+        headers, name_notes = _unique_headers(labels, len(idxs))
+
+        cols_values = []
+        for i in idxs:
+            got = _safe(lambda i=i: list(ws.to_list(i)), None)
+            if got is None:
+                raise OriginError("sheet_read_failed",
+                                  "读不出第 %d 列的值（句柄可能已失效）" % (i + 1),
+                                  ["origin_inspect 看页面还在不在",
+                                   "重新 origin_import / origin_write 拿新句柄"])
+            cols_values.append(got)
+
+        declared = int(_safe(lambda: ws.rows, 0) or 0)
+        longest = max([len(v) for v in cols_values] + [0])
+        n_rows = max(declared, longest)
+        warnings = list(name_notes)
+        if declared and longest and declared > longest:
+            # A sheet can report more rows than any column holds (trailing blank
+            # rows the user typed over). Exporting fewer rows than the sheet says it
+            # has would silently drop rows the user sees in Origin.
+            warnings.append("工作表报告 %d 行，最长的一列只有 %d 个值：后 %d 行是空行，"
+                            "导出时照实写成空" % (declared, longest, declared - longest))
+        elif declared and longest and declared < longest:
+            warnings.append("工作表报告 %d 行，但最长的一列有 %d 个值：已按 %d 行读，短的列补空" % (declared, longest, longest))
+        short = ["%s(%d/%d)" % (headers[k], len(v), n_rows)
+                 for k, v in enumerate(cols_values) if v and len(v) < n_rows]
+        if short and not (declared and declared > longest):
+            warnings.append("这些列比工作表短，导出时空着：%s" % ", ".join(short))
+
+        off = [k for k, d in enumerate(display) if d]
+        if off:
+            warnings.append("这些列声明了显示格式（D 标签），导出的是 Origin 的原始数值："
+                            "日期/时间列就是序列号（1 = 1900-01-01，45292.0 = 2024-01-01），"
+                            "不是屏幕上那段文字：%s（要显示文本见 sample_display；"
+                            "它与原始值相同就说明该列只声明了格式、并没有按日期类型显示）"
+                            % ", ".join("%s(%s)" % (headers[k], display[k]) for k in off))
+        kinds = [_column_kind(v) for v in cols_values]
+        for k, kind in enumerate(kinds):
+            if kind == "empty" and n_rows:
+                warnings.append("第 %d 列 %r 一行有效值都没有（空列照样导出，只有表头）"
+                                % (idxs[k] + 1, headers[k]))
+
+        sample = {}
+        for k, vals in enumerate(cols_values):
+            sample[headers[k]] = [sanitize(v) for v in vals[:want]]
+        sample_display = {}
+        for k in off:
+            vals = cols_values[k]
+            shown = {}
+            for r in range(min(want, 3, len(vals))):
+                text = _safe(lambda r=r, c=idxs[k]: str(ws.cell(r, c)), "")
+                if text:
+                    shown[str(r + 1)] = text
+            if shown:
+                sample_display[headers[k]] = shown
+
+        out = {
+            "worksheet": _bind("ws", ws, _safe(lambda: ws.name, "")),
+            "name": _safe(lambda: ws.name, ""),
+            "rows": n_rows,
+            "cols": len(idxs),
+            "columns": [{"index": idxs[k] + 1, "name": headers[k],
+                         "units": units[k], "display": display[k],
+                         "kind": kinds[k],
+                         "filled": sum(1 for v in cols_values[k]
+                                       if v is not None and v == v and v != "")}
+                        for k in range(len(idxs))],
+            "sample": sample,
+            "sample_rows": min(want, n_rows),
+        }
+        if sample_display:
+            out["sample_display"] = sample_display
+
+        raw_path = str(path or "").strip()
+        if raw_path:
+            target = _norm_target(raw_path, fmt)
+            _prepare_write(target)
+            header_text = ["%s%s" % (h, (" [%s]" % units[k]) if units[k] else "")
+                           for k, h in enumerate(headers)]
+            checkpoints = []
+            for r in sorted({0, n_rows // 2, n_rows - 1}):
+                if 0 <= r < n_rows:
+                    for c in sorted({0, len(idxs) - 1}):
+                        checkpoints.append((r, c, _cell_text(cols_values[c][r])
+                                             if r < len(cols_values[c]) else ""))
+            written_rows = 0
+            try:
+                with open(target, "w", encoding=enc, newline="") as fh:
+                    writer = csv.writer(fh, delimiter=delim, lineterminator="\r\n")
+                    writer.writerow(header_text)
+                    for r in range(n_rows):
+                        row = []
+                        for vals in cols_values:
+                            row.append(_cell_text(vals[r]) if r < len(vals) else "")
+                        writer.writerow(row)
+                        written_rows += 1
+            except OSError as exc:
+                raise OriginError("export_failed", "数据文件写不出来：%s（%s）"
+                                  % (target, exc.strerror or exc),
+                                  ["路径必须可写；UNC/未映射盘先排除",
+                                   "文件是否正被 Excel 打开着"])
+            # Header text in the file carries the units, so verify against that same
+            # list rather than the bare names.
+            got_rows, problems = _check_data_file(target, enc, delim, header_text,
+                                                  written_rows, checkpoints)
+            with open(target, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            size = os.path.getsize(target)
+            if problems:
+                raise OriginError("writeback_mismatch",
+                                  "写出去的文件回读对不上（%d 行写入 / %d 行读回）：%s"
+                                  % (written_rows, got_rows, "；".join(problems[:3])),
+                                  ["换一个文件名再导一次",
+                                   "文件可能正被 Excel 等程序占用：先关掉",
+                                   "这条说明数据落盘不可靠，别把它当成导好了"])
+            out["exported"] = {"path": target, "bytes": size, "sha256": digest,
+                               "rows_written": got_rows, "cols_written": len(idxs),
+                               "delimiter": {",": "comma", "\t": "tab"}[delim],
+                               "encoding": enc, "verified": True}
+            rel = _rel_note(path)
+            if rel:
+                warnings.append(rel)
+            out["note"] = ("文件由桥自己写出并回读核对（表头、行数、每行格数、抽查格子）；"
+                           "Origin 自带的 expASC 走不通，实测 lt_exec 一律返回 False 且不落盘")
+        else:
+            out["note"] = ("只读了前 %d 行；要全部数据就传 path，桥会把整张表写出去并回读核对"
+                           % min(want, n_rows))
+        out["warnings"] = warnings
+        out["proof_level"] = "verified"
+        return sanitize(out)
+
+    return call(run)
+
+
 def column_formula(worksheet, col, formula, label="", units=""):
     """Set a column formula (Fx) so the column recomputes from its siblings."""
     ws = _resolve("ws", worksheet)
@@ -1762,11 +2279,29 @@ def plot(worksheet, x=1, y=2, plot_type="line", graph_name="", title="",
         op = origin()
         xi = _col_index(ws, x)
         yis = [_col_index(ws, c) for c in ys]
+        # An all-empty or all-text y column draws nothing while every other check
+        # still passes: x has values, so the axis span is right, and add_plot reports
+        # one plot in the layer. Measured through chart_render: a preset with one
+        # required column got y=2, Origin keeps a second EMPTY column, and the result
+        # was an empty 0..10 chart marked proof_level "verified".
+        blanks = []
+        for yi in yis:
+            vals = _safe(lambda yi=yi: list(ws.to_list(yi)), []) or []
+            if not any(isinstance(v, (int, float)) and not isinstance(v, bool) and v == v
+                       for v in vals):
+                blanks.append(yi + 1)
+        if blanks:
+            raise OriginError("plot_empty_column",
+                              "这些 y 列一个数值都没有，画出来会是空图：第 %s 列"
+                              % ", ".join(str(c) for c in blanks),
+                              ["origin_read_sheet 看列里到底是什么值",
+                               "换成有数据的列（列号从 1 开始）",
+                               "文本分类列要先编码成数字再画"])
         book = ws.get_book().name
         # plotxy resolves its range against the ACTIVE worksheet, so activate the
         # book first or it silently plots the wrong sheet.
         op.lt_exec("win -a %s;" % book)
-        if len(yis) == 1 and not layer and not tpl:
+        if len(yis) == 1 and not layer and not tpl and not graph:
             before = {g.name for g in _safe(lambda: op.graph_list(), []) or []}
             if not op.lt_exec("plotxy iy:=(%d,%d) plot:=%d;"
                               % (xi + 1, yis[0] + 1, PLOT_CODES[plot_type])):
@@ -1791,6 +2326,18 @@ def plot(worksheet, x=1, y=2, plot_type="line", graph_name="", title="",
                     raise OriginError("bad_template", "Origin 拒绝用模板 %r 建图页" % tpl,
                                       ["模板名不区分大小写、可不带扩展名",
                                        "可用：%s" % ", ".join(sorted(GRAPH_TEMPLATES))])
+            elif graph:
+                # A graph handle without a layer used to fall through to plotxy, which
+                # always builds a NEW page: measured, plot(ws, graph="gr-2") answered
+                # channel "plotxy" and left the target page untouched while adding an
+                # orphan Graph2 to the project. `layer` defaults to 0, so "no layer"
+                # and "layer 0" are the same value and cannot be told apart — the
+                # presence of `graph` is what decides.
+                gr = _graph_of(op, graph)
+                if gr is None:
+                    raise OriginError("graph_not_found", "找不到图页：%s" % graph,
+                                      ["origin_inspect 看现有图页",
+                                       "要新建图就不要传 graph"])
             else:
                 gr = op.new_graph(graph_name or "")
             try:
@@ -2462,6 +3009,17 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
                               "bounds 的值要是 [下界, 上界]，参数 %s 收到 %r" % (name, pair),
                               ['如 {"y0": [0, null]}，null 表示不设该侧'])
 
+    if kind == "linear" and starts:
+        # LinearFit has no initial-guess API, so `starts` used to be quietly turned
+        # into a PIN: measured, starts={"Slope": 5.0} made the slope come back exactly
+        # 5.0 (and r_squared null) — the caller asked for a starting point and got the
+        # answer fixed instead. Refused up front, before any COM round trip.
+        raise OriginError(
+            "linear_ignored_starts",
+            "linear 拟合没有初值可设：starts 会被当成「把参数钉死」，所以不接受",
+            ["要固定截距/斜率就用 fixed={\"Intercept\": 0} 或 {\"Slope\": 1}",
+             "要设初值请用非线性拟合：kind=nlfitsing func=… starts={…}"])
+
     def run():
         op = origin()
         xi, yi = _col_index(ws, x), _col_index(ws, y)
@@ -2469,10 +3027,18 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
             lf = op.LinearFit()
             lf.set_data(ws, xi, yi)
             notes = []
-            if starts and "Slope" in starts:
-                notes.append({"fix_slope": _safe(lambda v=starts["Slope"]: lf.fix_slope(float(v)), "err") != "err"})
-            if starts and "Intercept" in starts:
-                notes.append({"fix_intercept": _safe(lambda v=starts["Intercept"]: lf.fix_intercept(float(v)), "err") != "err"})
+            for name, val in (fixed or {}).items():
+                key = str(name).strip().lower()
+                if key not in ("slope", "intercept"):
+                    notes.append({"param": str(name), "ok": False,
+                                  "why": "linear 只认 Slope / Intercept"})
+                    continue
+                if key == "slope":
+                    notes.append({"fix_slope": _safe(
+                        lambda v=val: lf.fix_slope(float(v)), "err") != "err"})
+                else:
+                    notes.append({"fix_intercept": _safe(
+                        lambda v=val: lf.fix_intercept(float(v)), "err") != "err"})
             res = lf.result()
             if make_report:
                 _safe(lf.report)
@@ -2536,9 +3102,19 @@ def export(graph, path="", fmt="png", width=1600):
         if page is None:
             raise OriginError("graph_not_found", "找不到图页：%s（项目里可能还没有图）" % (graph or ""))
         name = _safe(lambda: page.name, "Graph1")
-        # No path is not an invitation to write into the process CWD: under dsh
-        # that is the plugin's node_modules folder. Origin's User Files wins.
-        folder = _safe(lambda: op.path("u"), "") or os.getcwd()
+        # No path is not an invitation to write into the process CWD: under dsh that
+        # is the plugin's node_modules folder. Origin's User Files wins — and when
+        # even that cannot be read, say so instead of falling back to the CWD.
+        # Measured: with op.path('u') raising, export(path="") wrote a real PNG into
+        # the process CWD and reported it as a successful delivery, with no warning —
+        # the exact pollution the comment above promises never to do.
+        folder = _safe(lambda: op.path("u"), "") or ""
+        if not str(path or "").strip() and not folder:
+            raise OriginError(
+                "user_files_unknown",
+                "读不到 Origin 的 User Files 目录，又没给 path：不猜就会写进进程工作目录（dsh 下是插件安装目录）",
+                ["给一个绝对路径，例如 path=\"D:\\\\out\\\\图.png\"",
+                 "或先 origin_status 看 paths.user 是否有值"])
         raw_path = str(path or "").strip()
         target_path = _norm_target(raw_path or os.path.join(folder, "%s.%s" % (name, fmt)), fmt)
         _prepare_write(target_path)
@@ -2596,8 +3172,15 @@ def _save_project(path=""):
         else:
             # Never default to the process CWD: under dsh that is the plugin's
             # node_modules folder, so an unnamed save would litter the install.
-            target = os.path.join(_safe(lambda: op.path("u"), "") or os.getcwd(),
-                                  time.strftime("origin_bridge_%Y%m%d_%H%M%S.opju"))
+            folder = _safe(lambda: op.path("u"), "") or ""
+            if not folder:
+                raise OriginError(
+                    "user_files_unknown",
+                    "读不到 Origin 的 User Files 目录，又没给 path：不猜就会写进进程工作目录"
+                    "（dsh 下是插件安装目录）",
+                    ["给一个绝对路径，例如 path=\"D:\\\\out\\\\工程.opju\"",
+                     "或先 origin_status 看 paths.user 是否有值"])
+            target = os.path.join(folder, time.strftime("origin_bridge_%Y%m%d_%H%M%S.opju"))
         if not target.lower().endswith((".opju", ".opj")):
             target += ".opju"
         _prepare_write(target)
@@ -2726,7 +3309,13 @@ def inspect(graph=""):
                 layers.append({"layer": i,
                                "x_title": _safe(lambda l=lay: l.axis("x").title, ""),
                                "y_title": _safe(lambda l=lay: l.axis("y").title, ""),
-                               "plots": _safe(lambda l=lay: len(l.plots()), 0)})
+                               # GLayer has plot_list(), not plots(): `l.plots()` raised
+                               # AttributeError, `_safe` swallowed it into 0, and this
+                               # tool therefore reported "0 curves in every layer" for
+                               # a graph that had just been drawn — measured right
+                               # after plot() returned plots_in_layer 1. The model read
+                               # that as "the graph is empty" and redrew.
+                               "plots": _safe(lambda l=lay: len(l.plot_list()), 0)})
                 i += 1
             out.update({"graph": _safe(lambda: page.name, ""), "layers": layers})
         return sanitize(out)
@@ -2746,6 +3335,19 @@ def _exit_confirmed(pid, before):
     if pid is not None:
         started = next((r.get("started", "") for r in (before or []) if r["pid"] == pid), "")
         return _wait_pid_gone(pid, started, timeout=8.0)
+    if _started_pids:
+        # We DO know which instances are ours; a smaller total count proves nothing
+        # (measured: with two of ours running and one of them dying, the count went
+        # 3 -> 2 and this answered "gone" while the Origin we were driving still ran,
+        # so origin_exit reported exited:true and released the lock).
+        after = _process_rows()
+        if after is None:
+            return "unknown"
+        left = {r["pid"] for r in after}
+        mine = {p for p in _started_pids if p in left}
+        if not mine:
+            return "gone"
+        return "alive" if mine else "unknown"
     # Attached to an instance we did not start: at least one Origin must vanish.
     after = _process_rows()
     if after is None or before is None:
@@ -2766,7 +3368,15 @@ def exit_origin(save_to="", force=False):
         pid = _attached_pid(before)
         row = next((r for r in before or [] if r["pid"] == pid), None) \
             if pid is not None else None
-        if not (row and _row_owned(row)) and not force:
+        # Ownership proof is "this pid is one we started", not "this pid happens to be
+        # in the snapshot". Measured: after the instance we recorded had exited (or the
+        # probe snapshot missed it), `row` was None and origin_exit answered
+        # foreign_instance about the bridge's OWN instance — a lie that also blocks the
+        # legitimate exit. A pid we started is ours whether or not the probe listed it;
+        # an empty _started_pids (probe-uncertain session) still refuses, which is the
+        # fail-closed direction that matters.
+        owned = (pid is not None and pid in _started_pids) or bool(row and _row_owned(row))
+        if not owned and not force:
             # The bridge may have attached to an Origin the user opened. Quitting
             # it would discard unsaved work that has nothing to do with this chat.
             raise OriginError(
@@ -2788,6 +3398,29 @@ def exit_origin(save_to="", force=False):
             # then either say it worked (with the warning) or fail honestly.
             err = "%s: %s" % (type(exc).__name__, exc)
         state = _exit_confirmed(pid, before)
+        escalated = []
+        exit_verdict = state          # the pre-escalation answer, for the warning below
+        # op.exit() is a request, and in this environment it does not always take:
+        # measured 2026-11-26, after a COM reset the re-attach can launch a SECOND
+        # Origin (the first one keeps running windowless), so op.exit() closed the new
+        # one and the old one survived. The old code hid that with a "the instance
+        # count went down" heuristic which answered gone while an instance we started
+        # was still there; the previous release simply reported failure. origin_exit
+        # promises to close what it owns, so escalate the way origin_reclaim does
+        # (polite taskkill, then forced) and say which pids that took.
+        targets = []
+        if pid is not None and (owned or force):
+            targets = [pid]
+        elif pid is None and force:
+            # Ambiguous (several instances are ours) and the caller forced it: close
+            # every instance this session started, not just one.
+            targets = sorted(_started_pids)
+        for target in targets:
+            verdict = _close_pid(target, next((r.get("started", "") for r in (before or [])
+                                              if r.get("pid") == target), ""))
+            escalated.append((target, verdict))
+        if escalated and all(v in ("closed", "force_closed") for _p, v in escalated):
+            state = "gone"
         _handles.clear()
         _names.clear()
         _project_file = ""
@@ -2798,18 +3431,35 @@ def exit_origin(save_to="", force=False):
             # letting the next session in would attach to a half-closed instance.
             raise OriginError(
                 "exit_unconfirmed",
-                "发出退出请求后没能确认 Origin 已退出（%s）%s"
-                % (state, ("；退出调用还报错：" + err) if err else ""),
+                "发出退出请求后没能确认 Origin 已退出（%s%s）%s"
+                % (state, ("，强制关闭也没成功：%s" % escalated) if escalated else "",
+                   ("；退出调用还报错：" + err) if err else ""),
                 ["用 origin_instances 看还有哪些实例在跑",
                  "还在的话再调一次 origin_exit，或在任务管理器结束 Origin64.exe",
                  "锁仍由本会话持有，避免另一个会话接上一个没关干净的 Origin"])
-        _session_lock_release()   # only after the instance is confirmed gone
+        released, why = _session_lock_release()   # only after the instance is confirmed gone
         if pid is not None:
             _started_pids.discard(pid)
             _owned_forget([pid])
         out = {"exited": True, "saved": saved, "pid": pid or "unknown"}
+        if escalated:
+            out["forced"] = True
+            out["forced_pids"] = [{"pid": p, "how": v} for p, v in escalated]
+            out.setdefault("warnings", []).append(
+                "op.exit() 没有让 Origin 退出（%s），已按关闭流程强制结束：%s"
+                % (exit_verdict, ", ".join("%s(%s)" % (p, v) for p, v in escalated)))
         if err:
             out["warning"] = "退出调用报了错，但进程已确认退出：" + err
+        if not released:
+            # A lock that could not be released is a fact the next session will run
+            # into (it gets origin_busy about a bridge that already finished), so it
+            # belongs in this result instead of being swallowed.
+            out["lock_released"] = False
+            out.setdefault("warnings", []).append("会话锁没能释放：" + why)
+            out.setdefault("next_actions", []).append(
+                "确认没有别的桥在跑后手动删掉 %s" % _SESSION_LOCK)
+        else:
+            out["lock_released"] = True
         if dismissed:
             out["dismissed_dialogs"] = dismissed
         return sanitize(out)
@@ -2817,7 +3467,7 @@ def exit_origin(save_to="", force=False):
     return call(run)
 
 
-def figure(source="", columns=None, x=1, y=1, plot_type="line", title="",
+def figure(source="", columns=None, x=1, y=2, plot_type="line", title="",
            x_title="", y_title="", fmt="png", width=1600, output_dir="",
            export_path="", project_path="", do_project=None,
            template="", legend=False):
@@ -3091,6 +3741,120 @@ def close_pages(kind="graph", names=None, dry_run=False):
 
 
 # ------------------------------------------------- scientific chart presets
+#
+# A preset's `default_plot_kind` is metadata, and Origin's own plot types are only
+# line / scatter / line+symbol / column. Measured on the 40 shipped presets: 23 of
+# them name a kind that has no drawable path here (bar, box, radar, sankey, matrix,
+# 3d_line…), and the old code silently substituted "line" for every one of them — so
+# asking for a histogram delivered a line chart, or an empty one, still marked
+# proof_level "verified".
+#
+# Two honest outcomes instead, and nothing in between:
+#   * _PRESET_KINDS has a genuinely close primitive -> draw it, and say what part of
+#     the preset was NOT honoured (dual axis, error bars, log scale, stacking…);
+#   * no close primitive -> refuse with `preset_kind_unsupported` and name the tool
+#     that CAN draw it (origin_matrix for heatmap/3d, origin_layer+origin_plot for
+#     dual axis, origin_fit for a fit overlay).
+_PRESET_KINDS = {
+    "line": ("line", ""),
+    "log": ("line", "预设要对数 Y 轴：这条路径不设轴刻度，画完用 origin_style y_scale=log10"),
+    "dual_y": ("line", "预设是双 Y 轴图：这里只画了单层第 0 层，第二列要 origin_layer(right) "
+                       "+ origin_plot(layer=1) 再画一次"),
+    "line+fit": ("line", "预设要拟合曲线叠加：这里只画了原始曲线，接着 origin_fit 再叠加拟合"),
+    "line_error": ("line", "预设要误差棒：这条路径不画误差棒"),
+    "step": ("line", "预设要阶梯线：这里画的是折线"),
+    "scatter": ("scatter", ""),
+    "bar": ("column", ""),
+    "hist": ("column", "预设要直方图：这里把值按柱状画，分箱请用 Origin 自己的直方图或 origin_plot"),
+    "stacked_bar": ("column", "预设要堆叠柱：这里画的是并列柱"),
+    "percent_stacked_bar": ("column", "预设要百分比堆叠柱：这里画的是并列柱"),
+    "horizontal_bar": ("column", "预设要横向柱：这里画的是纵向柱，坐标轴要自己换 origin_style"),
+}
+# Requested kinds these primitives draw EXACTLY (Origin calls a bar chart "column"),
+# so a mapping with no note is only allowed for these.
+_PRESET_FAITHFUL = {"line", "scatter", "bar"}
+_PRESET_KIND_HINT = {
+    "box": "箱线图：origin_plot(template=…) 或用 Origin 自带箱线图模",
+    "ridgeline": "山脊线：Origin 有自带模板，用 origin_plot template=",
+    "matrix": "矩阵图：用 origin_matrix(template=heat_map/cmap/mesh)",
+    "heatmap": "热力图：用 origin_matrix(template=heat_map)",
+    "3d_line": "3D 曲线：用 origin_matrix(template=3d)",
+    "bubble": "气泡图：Origin 需要第三列做大小映射，这条路径没有",
+    "paired_line": "配对连线：需要两两分组的专用图模",
+    "radar": "雷达图：Origin 有自带雷达图模，用 origin_plot template=",
+    "sankey": "桑基图：Origin 有自带图模，用 origin_plot template=",
+    "forest": "森林图：需要误差棒与参考线，没有通用路径",
+}
+
+
+def _norm_token(text):
+    return re.sub(r"[^0-9a-z]+", "", str(text).lower())
+
+
+def _column_tokens(text):
+    return [t for t in re.split(r"[^0-9a-z]+", str(text).lower()) if t]
+
+
+def _match_required(required, detected):
+    """Which detected column stands for each required name.
+
+    Substring matching on the whole name was too loose AND too strict in the same
+    breath: 'x' matched 'index' and 'y' matched 'yield' (so a preset answered ok for
+    data it could not use), while a perfectly good column named '2θ / °' could never
+    match 'two_theta' (so a preset answered "missing column" for the right data).
+    Exact normalized equality first, then a unique token prefix. Never a bare
+    substring, and every result names the column it picked.
+    """
+    normed = [(c, _norm_token(c), _column_tokens(c)) for c in detected]
+    out = {}
+    for req in required:
+        want = _norm_token(req)
+        exact = [c for c, n, _t in normed if n == want]
+        if exact:
+            out[req] = exact[0]
+            continue
+        want_tokens = _column_tokens(req)
+        if want_tokens:
+            pref = [c for c, _n, toks in normed
+                    if toks[:len(want_tokens)] == want_tokens]
+            if len(pref) == 1:
+                out[req] = pref[0]
+                continue
+        out[req] = None
+    return out
+
+
+def _data_shape_notes(data):
+    """Problems with an inline data dict that would make rendering fail anyway."""
+    notes = []
+    for col, values in data.items():
+        if not isinstance(values, (list, tuple)):
+            notes.append("列 %r 的值不是列表（%s）" % (col, type(values).__name__))
+            continue
+        if not values:
+            notes.append("列 %r 是空的（0 行）" % col)
+            continue
+        bad = [v for v in values if v is not None and not isinstance(v, (int, float))]
+        if bad:
+            notes.append("列 %r 里有非数值项（例如 %r）：内联 columns 只收数值，"
+                         "文本分类列要先编码，或改用 source 走文件导入"
+                         % (col, bad[0]))
+    return notes
+
+
+def _preset_kind(requested):
+    """Preset plot kind -> (drawable kind, note about what is NOT honoured)."""
+    kind = str(requested or "line").strip().lower()
+    if kind in _PRESET_KINDS:
+        return _PRESET_KINDS[kind]
+    hint = _PRESET_KIND_HINT.get(kind, "")
+    raise OriginError(
+        "preset_kind_unsupported",
+        "这个预设的图类型 %r 没有可画的路径，不能假装画成折线糊过去" % kind,
+        (["%s" % hint] if hint else []) +
+        ["要折线/散点/柱状就显式传 plot_type=line/scatter/column",
+         "只看预设的轴标题与建议拟合：origin_chart_preset"])
+
 
 def _catalog():
     try:
@@ -3113,25 +3877,41 @@ def chart_presets(category=""):
 
 def chart_preset(name):
     cat = _catalog()
+    # describe_template is case/space/hyphen-insensitive now: the category lookup
+    # always was, so "XRD" / " xrd " / "uv-vis" answering not-found was an
+    # inconsistency in this same tool family.
     tpl = cat.describe_template(name)
     if tpl is None:
         raise OriginError("preset_not_found", "没有这个图表预设：%r" % name,
-                          ["origin_chart_presets 看全部 %d 个" % len(cat.TEMPLATES)])
+                          ["名字是小写下划线写法，例如 xrd / tg_dtg / bland_altman",
+                           "origin_chart_presets 看全部 %d 个" % len(cat.TEMPLATES)])
     return sanitize(tpl)
 
 
 def chart_check(name, data=None, columns=None):
-    """Dry-run a preset against real data without touching Origin."""
+    """Dry-run a preset against real data without touching Origin.
+
+    Says which detected column each required name matched, and separates "no data
+    given" from "the names do not match" — both used to answer a bare `warning:
+    缺少列`, which read as "your data is wrong" even when the caller had passed no
+    data at all. Also checks the shape the renderer will actually receive: inline
+    text columns and 0-row columns pass this check and then die inside
+    write_columns, so they are reported here instead.
+    """
     cat = _catalog()
-    tpl = cat.describe_template(name)
+    tpl = cat.describe_template(str(name or ""))
     if tpl is None:
-        raise OriginError("preset_not_found", "没有这个图表预设：%r" % name)
+        raise OriginError("preset_not_found", "没有这个图表预设：%r" % name,
+                          ["预先名是小写的下划线写法，例如 xrd / tg_dtg / bland_altman",
+                           "origin_chart_presets 看全部 %d 个" % len(cat.TEMPLATES)])
+    shape_notes = []
     if data and not columns:
         # `data` is documented as a file path, but models hand us dicts and lists
         # here constantly; accept those as column sources instead of dying with a
         # raw TypeError, and say so when the value is neither.
         if isinstance(data, dict):
             columns = list(data)
+            shape_notes = _data_shape_notes(data)
         elif isinstance(data, (list, tuple)):
             columns = [str(c) for c in data]
         elif isinstance(data, str):
@@ -3144,26 +3924,48 @@ def chart_check(name, data=None, columns=None):
                                   "data 要的是数据文件路径，或者列名列表/字典：%s" % exc,
                                   ["origin_chart_check 传 columns=[...] 更直接"]) from exc
             columns = [c["name"] for c in parsed["columns"]]
+            if parsed.get("rows") == 0:
+                shape_notes.append("文件里 0 行数据")
         else:
             raise OriginError("bad_arguments", "data 只能是文件路径字符串、列名字典或列表",
                               ["origin_chart_check 传 columns=[...] 更直接"])
-    detected = list(columns or [])
+    detected = [str(c) for c in (columns or [])]
+    required = [str(r) for r in (tpl["required_columns"] or ())]
+    if not detected:
+        return sanitize({"status": "no_data", "template": tpl["name"],
+                         "required_columns": required,
+                         "optional_columns": tpl.get("optional_columns") or [],
+                         "columns_detected": [], "matched": {}, "issues": ["还没有数据"],
+                         "next_actions": ["给 data（文件路径）或 columns（列名），"
+                                          "或者直接 origin_chart_render(source=…)"],
+                         "suggested_fit": tpl.get("suggested_fit"),
+                         "default_axis_titles": tpl.get("default_axis_titles"),
+                         "default_plot_kind": tpl.get("default_plot_kind"),
+                         "extra": tpl.get("extra", "")})
+    matched = _match_required(required, detected)
     issues = []
-    for req in tpl["required_columns"] or ():
-        norm = str(req).lower().replace("_", "").replace(" ", "")
-        if not any(norm in str(c).lower().replace("_", "").replace(" ", "") for c in detected):
-            issues.append("缺少列：%s" % req)
-    return sanitize({"status": "ok" if not issues else "warning", "template": name,
-                     "required_columns": tpl["required_columns"],
+    for req in required:
+        if matched.get(req) is None:
+            issues.append("这个预设要的列 %r 在你的数据里找不到（数据列：%s）"
+                          % (req, ", ".join(detected) or "无"))
+    issues.extend(shape_notes)
+    unmatched = [r for r in required if matched.get(r) is None]
+    return sanitize({"status": "ok" if not issues else "warning", "template": tpl["name"],
+                     "required_columns": required,
                      "optional_columns": tpl.get("optional_columns") or [],
-                     "columns_detected": detected, "issues": issues,
+                     "columns_detected": detected, "matched": matched, "issues": issues,
                      "suggested_fit": tpl.get("suggested_fit"),
                      "default_axis_titles": tpl.get("default_axis_titles"),
                      "default_plot_kind": tpl.get("default_plot_kind"),
-                     "extra": tpl.get("extra", "")})
+                     "extra": tpl.get("extra", ""),
+                     **({"next_actions": [
+                         "列名对不上不代表数据不对：origin_chart_render 里用 x=/y= 显式指定列号，"
+                         "或直接用 origin_figure / origin_plot",
+                         "也可以先把列的长名改成预设要求的名字（见 required_columns）"]}
+                        if unmatched else {})})
 
 
-def chart_render(name, source="", columns=None, x=1, y=2, output_dir="",
+def chart_render(name, source="", columns=None, x=None, y=None, output_dir="",
                  x_title=None, y_title=None, title=None, plot_type=None,
                  with_legend=True, fmt="png", width=1600):
     """Render a scientific preset with the verified plot/style/legend path.
@@ -3171,21 +3973,73 @@ def chart_render(name, source="", columns=None, x=1, y=2, output_dir="",
     Only the preset's metadata is taken from the catalog: axis titles, plot kind
     and the suggested fit. Its own render_template() calls op.new(), which would
     throw away whatever project the user has open in Origin.
+
+    Honesty rules this function follows (each one is a measured defect from 0.4.21):
+      * no data at all is `bad_arguments`, not "the columns do not match";
+      * a preset kind with no drawable primitive is refused with a pointer to the
+        tool that CAN draw it, never silently turned into a line chart;
+      * x/y are resolved from the preset's required columns (so a file whose column
+        order differs from the preset still plots the right pair) unless the caller
+        gives them;
+      * tga_dtg still says its dual axis, and a superimposed fit/step/log scale are
+        named in warnings when the preset asked for them.
     """
-    checked = chart_check(name, data=source) if not columns else chart_check(name, columns=columns)
-    if checked["issues"]:
-        # Drawing a preset over data that does not carry its columns produced a
-        # chart with the wrong axis labels and no hint anything was off.
-        raise OriginError("preset_columns_mismatch",
-                          "%s 预设的列对不上：%s（识别到的列：%s）"
-                          % (name, "；".join(checked["issues"]), checked["columns_detected"] or "无"),
-                          ["把数据列名改成预设要求的名字（见 required_columns）",
-                           "换一个匹配数据的预设：origin_chart_presets",
-                           "不套预设只是画图：用 origin_figure"])
+    if not source and not columns:
+        raise OriginError("bad_arguments",
+                          "chart_render 需要 source（数据文件）或 columns（内联数据）",
+                          ["origin_chart_check 只能空跑判列名；真的要画就得给数据"])
+    if source:
+        parsed = read_file(source)
+        names = [c["name"] for c in parsed["columns"]]
+        if not parsed.get("rows"):
+            raise OriginError("import_empty", "文件里 0 行数据：%s" % source,
+                              ["origin_read_file 先看文件结构"])
+    elif isinstance(columns, dict):
+        names = [str(c) for c in columns]
+        notes = _data_shape_notes(columns)
+        if notes:
+            raise OriginError("bad_arguments", "；".join(notes[:2]),
+                              ["内联 columns 只收数值列表；文本分类列请改成数字编码，"
+                               "或把文件用 source 导入"])
+    else:
+        names = [str(c) for c in (columns or [])]
     preset = chart_preset(name)
-    kind = str(plot_type or preset.get("default_plot_kind") or "line").lower()
-    if kind not in PLOT_CODES:
-        kind = "line"
+    checked = chart_check(preset["name"], columns=names)
+    kind, kind_note = _preset_kind(plot_type or preset.get("default_plot_kind"))
+    required = [str(r) for r in (preset.get("required_columns") or ())]
+    matched = checked.get("matched") or {}
+
+    def position(which):
+        if which is not None:
+            return which
+        if not required:
+            return None
+        req = required[0]
+        col = matched.get(req)
+        if col is None:
+            return None
+        return names.index(col) + 1
+
+    if x is None:
+        x = position(None)
+    if x is None:
+        raise OriginError(
+            "preset_columns_mismatch",
+            "%s 预设要求列 %s，在你的数据里找不到（数据列：%s）"
+            % (name, required[0] if required else "?", ", ".join(names) or "无"),
+            ["用 x=/y= 显式指定列号",
+             "或先把列长名改成预设要求的名字（远端列名见 required_columns）",
+             "换一个匹配数据的预设：origin_chart_presets"])
+    if y is None:
+        if len(required) < 2 or matched.get(required[1]) is None:
+            raise OriginError(
+                "preset_needs_two_columns",
+                "%s 预设只给了 %d 个必需列，画图至少要 x 和 y 两列"
+                % (name, len(required)),
+                ["这个预设更像「单列分布图」（直方图/粒径/混淆矩阵），"
+                 "origin_plot / origin_matrix 才是能画它的工具",
+                 "或者 y= 指一列别的数值列"])
+        y = names.index(matched[required[1]]) + 1
     titles = preset.get("default_axis_titles") or {}
     xt = x_title if x_title is not None else titles.get("x", "")
     yt = y_title if y_title is not None else titles.get("y", "")
@@ -3193,9 +4047,24 @@ def chart_render(name, source="", columns=None, x=1, y=2, output_dir="",
                  title=title if title is not None else preset.get("description", "")[:60],
                  x_title=xt, y_title=yt, fmt=fmt, width=width,
                  output_dir=output_dir, legend=with_legend)
-    out["preset"] = {"name": name, "category": preset.get("category", ""),
-                     "plot_type": kind, "x_title": xt, "y_title": yt}
+    notes = list(out.get("warnings") or [])
+    if kind_note:
+        notes.append("预设要求 %r，实际画的是 %r：%s"
+                     % (preset.get("default_plot_kind"), kind, kind_note))
+    for extra_key, label in (("y2", "第二 Y 轴"), ("z", "Z 轴")):
+        if titles.get(extra_key):
+            notes.append("预设还给了%s标题 %r，这条路径只设了单层的 X/Y 标题，那一项没有生效"
+                         % (label, titles[extra_key]))
+    if notes:
+        out["warnings"] = notes
+        out["next_actions"] = list(out.get("next_actions") or []) + ["origin_view 看看图对不对"]
+    out["preset"] = {"name": preset["name"], "category": preset.get("category", ""),
+                     "requested_plot_type": preset.get("default_plot_kind"),
+                     "plot_type": kind, "kind_faithful": not bool(kind_note),
+                     "x_title": xt, "y_title": yt, "x_column": x, "y_column": y}
     out["check"] = checked
+    if not kind_note and not notes:
+        out["proof_level"] = out.get("proof_level", "verified")
     if preset.get("suggested_fit"):
         out["hint"] = "这个预设建议拟合函数：%s（origin_fit kind=%s）" % (
             preset["suggested_fit"], preset["suggested_fit"])

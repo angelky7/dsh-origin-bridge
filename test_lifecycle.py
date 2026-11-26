@@ -25,6 +25,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import originlab  # noqa: E402
 
+# Keep a handle on the real probe: the with_fake helper replaces _process_rows by
+# design, and the checks about ITS semantics must call the original.
+originlab._real_process_rows = originlab._process_rows
+
 fails = []
 
 
@@ -278,6 +282,224 @@ def _probe_unavailable(_fake):
 
 
 with_fake([dict(BACK), dict(FRONT)], _probe_unavailable)
+
+print("探测不可用 / 没关掉 / 清理抛异常时，锁不能放（fail-closed）")
+
+
+def _lock_kept(_fake, label, close_verdict=None, close_raises=False, rows_mode="ok"):
+    """The lock may only go when the instance is PROVEN gone."""
+    originlab._started_pids.clear()
+    originlab._started_pids.add(1002)
+    originlab._session_lock_acquire()
+
+    if rows_mode == "none":
+        originlab._process_rows = lambda: None
+    elif rows_mode == "empty":
+        originlab._process_rows = lambda: []
+    else:
+        originlab._process_rows = lambda: [dict(BACK2)]
+
+    if close_raises:
+        def boom(pid, started="", verify_timeout=5.0):
+            raise OSError("taskkill exploded")
+        originlab._close_pid = boom
+    else:
+        originlab._close_pid = lambda pid, started="", verify_timeout=5.0: close_verdict
+
+    originlab._release_on_exit()
+    kept = os.path.exists(originlab._SESSION_LOCK)
+    check("%s -> 锁保留" % label, kept, kept)
+    if kept:
+        originlab._session_lock_release()
+
+
+with_fake([dict(BACK2)], lambda f: _lock_kept(f, "探测不可用", rows_mode="none"))
+with_fake([dict(BACK2)], lambda f: _lock_kept(f, "关闭结果 stuck", close_verdict="stuck"))
+with_fake([dict(BACK2)], lambda f: _lock_kept(f, "关闭结果 unverified", close_verdict="unverified"))
+with_fake([dict(BACK2)], lambda f: _lock_kept(f, "清理抛异常", close_raises=True))
+
+
+def _lock_released_when_probe_says_gone(_fake):
+    # An EMPTY table is different from an unavailable one: _process_rows only ever
+    # answers [] when it really looked and found nothing, so our instance is gone and
+    # the lock may go.
+    originlab._started_pids.clear()
+    originlab._started_pids.add(1002)
+    originlab._session_lock_acquire()
+    originlab._process_rows = lambda: []
+    originlab._release_on_exit()
+    check("探测说实例都没了 -> 放锁", not os.path.exists(originlab._SESSION_LOCK))
+
+
+with_fake([], _lock_released_when_probe_says_gone)
+
+
+def _lock_released(_fake):
+    originlab._started_pids.clear()
+    originlab._started_pids.add(1002)
+    originlab._session_lock_acquire()
+    originlab._process_rows = lambda: [dict(BACK2)]
+    originlab._close_pid = lambda pid, started="", verify_timeout=5.0: "closed"
+    originlab._release_on_exit()
+    check("确认关掉后锁才放", not os.path.exists(originlab._SESSION_LOCK))
+
+
+with_fake([dict(BACK2)], _lock_released)
+
+
+def _lock_released_when_instance_already_gone(_fake):
+    originlab._started_pids.clear()
+    originlab._started_pids.add(1002)
+    originlab._session_lock_acquire()
+    # The instance vanished before we looked: it is gone, so the lock may go.
+    originlab._process_rows = lambda: []
+    originlab._release_on_exit()
+    check("实例本来就没了也放锁", not os.path.exists(originlab._SESSION_LOCK))
+
+
+with_fake([], _lock_released_when_instance_already_gone)
+
+print("进程探测：powershell 跑了但失败，不许当成『机器上没有 Origin』")
+
+
+def _probe_semantics(_fake):
+    real_run = originlab.subprocess.run
+    # with_fake replaced _process_rows with its own stub; this block is about the REAL
+    # one, so put it back for the duration.
+    real_probe = originlab._real_process_rows
+
+    class Done(object):
+        def __init__(self, rc, out, err=""):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = err
+
+    probe_ok = "__OB_PROBE_OK__"
+    cases = [
+        ("退出码 1、无输出", Done(1, ""), None),
+        ("退出码 0 但没有结束标记", Done(0, "garbage\nalso garbage\n"), None),
+        ("退出码 0、正常一行", Done(0, "4321|2026-01-01T00:00:00|0\n" + probe_ok + "\n"),
+         [{"pid": 4321, "started": "2026-01-01T00:00:00", "window": 0}]),
+        ("退出码 0、真空输出", Done(0, probe_ok + "\n"), []),
+        ("退出码 0、有一行解析不了", Done(0, "garbage\n4321|T|0\n" + probe_ok + "\n"), None),
+    ]
+    originlab._process_rows = real_probe
+    for label, done, want in cases:
+        originlab.subprocess.run = lambda *_a, done=done, **_k: done
+        try:
+            got = originlab._process_rows()
+        finally:
+            originlab.subprocess.run = real_run
+        if want is None:
+            check("%s -> None" % label, got is None, got)
+        else:
+            check("%s -> %r" % (label, want), got == want, got)
+    # and the failure reason is kept for the tool that gave up
+    originlab.subprocess.run = lambda *_a, **_k: Done(1, "", "boom")
+    try:
+        originlab._process_rows()
+        check("探测失败留下了原因", bool(originlab._probe_notes), originlab._probe_notes)
+    finally:
+        originlab.subprocess.run = real_run
+
+
+with_fake([], _probe_semantics)
+
+print("_pid_alive：打不开不等于已死")
+
+
+def _pid_alive_semantics(_fake):
+    import ctypes
+
+    class FakeK32(object):
+        def __init__(self, handle, err, exit_ok=True, exit_code=259):
+            self.handle, self.err = handle, err
+            self.exit_ok, self.exit_code = exit_ok, exit_code
+            self.last = 0
+
+        def OpenProcess(self, *_a):
+            self.last = self.err
+            return self.handle
+
+        def GetLastError(self):
+            return self.last
+
+        def GetExitCodeProcess(self, _h, ref):
+            if not self.exit_ok:
+                return 0
+            ref._obj.value = self.exit_code
+            return 1
+
+        def CloseHandle(self, _h):
+            return 1
+
+    real = ctypes.windll.kernel32
+    cases = [
+        ("ERROR_INVALID_PARAMETER(87) = 不存在", FakeK32(0, 87), False),
+        ("ERROR_ACCESS_DENIED(5) = 看不见但活着", FakeK32(0, 5), True),
+        ("handle 打不开且原因未知", FakeK32(0, 1234), True),
+        ("句柄拿到了、退出码读不出", FakeK32(1, 0, exit_ok=False), True),
+        ("句柄拿到了、仍在运行", FakeK32(1, 0, exit_code=259), True),
+        ("句柄拿到了、已退出", FakeK32(1, 0, exit_code=0), False),
+    ]
+    for label, fake, want in cases:
+        ctypes.windll.kernel32 = fake
+        try:
+            got = originlab._pid_alive(424242)
+        finally:
+            ctypes.windll.kernel32 = real
+        check("_pid_alive: %s -> %s" % (label, want), got is want, got)
+
+
+if os.name == "nt":
+    with_fake([], _pid_alive_semantics)
+
+print("_exit_confirmed：我们自己启动的实例还活着时不能说 gone")
+
+
+def _exit_confirmed_semantics(_fake):
+    originlab._started_pids.clear()
+    originlab._started_pids.update({5001, 5002})
+    before = [{"pid": 5001, "started": "T", "window": 0},
+              {"pid": 5002, "started": "T", "window": 0},
+              {"pid": 6001, "started": "T", "window": 1}]
+    originlab._process_rows = lambda: [{"pid": 5001, "started": "T", "window": 0},
+                                       {"pid": 6001, "started": "T", "window": 1}]
+    check("我们自己那个还活着 -> alive", originlab._exit_confirmed(None, before) == "alive")
+    originlab._process_rows = lambda: [{"pid": 6001, "started": "T", "window": 1}]
+    check("我们自己的都没了 -> gone", originlab._exit_confirmed(None, before) == "gone")
+    originlab._process_rows = lambda: None
+    check("探测不可用 -> unknown", originlab._exit_confirmed(None, before) == "unknown")
+    originlab._started_pids.clear()
+    originlab._process_rows = lambda: [{"pid": 6001, "started": "T", "window": 1}]
+    check("没启动过任何实例时按总数判断", originlab._exit_confirmed(None, before) == "gone")
+
+
+with_fake([], _exit_confirmed_semantics)
+
+print("_session_lock_release 把失败讲出来")
+
+
+def _release_reports(_fake):
+    originlab._session_lock_acquire()
+    ok_released, why = originlab._session_lock_release()
+    check("正常释放返回 (True, '')", ok_released is True and why == "", (ok_released, why))
+
+    with open(originlab._SESSION_LOCK, "w", encoding="utf-8") as fh:
+        fh.write("{half-written")
+    ok_released, why = originlab._session_lock_release()
+    check("坏锁不删、但说清楚", ok_released is False and "读不出来" in why, (ok_released, why))
+    check("坏锁保持原样", os.path.isfile(originlab._SESSION_LOCK))
+    originlab._SESSION_LOCK and os.path.exists(originlab._SESSION_LOCK) and os.remove(originlab._SESSION_LOCK)
+
+    with open(originlab._SESSION_LOCK, "w", encoding="utf-8") as fh:
+        _json.dump({"bridge_pid": 999999999, "started_at": "T"}, fh)
+    ok_released, why = originlab._session_lock_release()
+    check("别人的锁不删、但说清楚",
+          ok_released is False and "不是本进程" in why, (ok_released, why))
+
+
+with_fake([], _release_reports)
 
 print("_close_pid 强杀后核实死亡")
 
@@ -680,7 +902,7 @@ import server  # noqa: E402
 names = [t["name"] for t in server.TOOLS]
 check("origin_instances 已注册", "origin_instances" in names, names[-3:])
 check("origin_reclaim 已注册", "origin_reclaim" in names, names[-3:])
-check("工具总数 27", len(names) == 27, len(names))
+check("工具总数 28", len(names) == 28, len(names))
 check("工具名唯一", len(set(names)) == len(names))
 for tool in server.TOOLS:
     if tool["name"] in ("origin_instances", "origin_reclaim"):

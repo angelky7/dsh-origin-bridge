@@ -299,7 +299,7 @@ async function runCheck(chosen) {
 
   out.push('origin-bridge --check（诊断；不启动 MCP，也不启动 Origin）');
   out.push('判定：解释器可用 + server.py 可读 + import numpy 成功 → 退出码 0；');
-  out.push('      import originpro 缺失只告警（离线照常注册 27 个工具，调用时报 missing_originpro）。');
+  out.push('      import originpro 缺失只告警（离线照常注册 28 个工具，调用时报 missing_originpro）。');
   out.push('');
   out.push(`[OK]   解释器      ${chosen.path}`);
   out.push(`       来源        ${chosen.label}`);
@@ -317,7 +317,7 @@ async function runCheck(chosen) {
   if (op.ok) out.push(`[OK]   import originpro  本机可用（版本 ${op.out === 'unknown' ? '未知' : op.out}）`);
   else {
     out.push(`[WARN] import originpro  不可用：${oneLine(op)}`);
-    out.push('       已知行为（不是本启动器的故障）：27 个工具照常注册，每次实际调用返回');
+    out.push('       已知行为（不是本启动器的故障）：28 个工具照常注册，每次实际调用返回');
     out.push('       missing_originpro 错误并附安装指引；装上 Origin + originpro 即可恢复。');
   }
 

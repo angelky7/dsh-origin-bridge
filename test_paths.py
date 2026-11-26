@@ -87,6 +87,47 @@ def main():
        == os.path.join(BASE, "中文测试", "图谱.png"))
     ok("tilde expanded", os.path.expanduser("~") in ol._norm_target("~/a.png"))
 
+    # ------------------------------------------- names Win32 will not accept
+    # Measured 2026-11-26: CreateFileW on '…\a|b.png' fails with ERROR_INVALID_NAME
+    # while _prepare_write had already created the parent dir, so the failure showed
+    # up much later as `export_failed: Origin 说导出了但文件不存在` — a diagnosis
+    # that blamed Origin for a path no Win32 writer accepts.
+    for ch in '<>|?*"':
+        ok("%r in the filename is bad_path" % ch,
+           code_of(lambda ch=ch: ol._norm_target(os.path.join(BASE, "a%sb.png" % ch), "png"))
+           == "bad_path")
+        ok("%r in a directory name is bad_path" % ch,
+           code_of(lambda ch=ch: ol._norm_target(os.path.join(BASE, "d%s"% ch, "b.png"), "png"))
+           == "bad_path")
+    ok("control character is bad_path",
+       code_of(lambda: ol._norm_target(os.path.join(BASE, "a\x01b.png"), "png")) == "bad_path")
+    ok("newline in the name is bad_path",
+       code_of(lambda: ol._norm_target(os.path.join(BASE, "a\nb.png"), "png")) == "bad_path")
+
+    # Reserved device names: harmless-looking on some Windows versions, a device on
+    # others, and bare NUL is a silent black hole everywhere.
+    for dev in ("CON.png", "com1.png", "NUL", "aux.txt", "lpt9.log", "PRN"):
+        ok("device name %s is bad_path" % dev,
+           code_of(lambda dev=dev: ol._norm_target(os.path.join(BASE, dev), "png")) == "bad_path")
+    ok("a name that merely starts like one is fine",
+       code_of(lambda: ol._norm_target(os.path.join(BASE, "console.png"), "png")) == "no-raise")
+
+    # \\?\ disables every normalisation below (so it can also point at a DIFFERENT
+    # file than the one asked for) and \\.\ is the device namespace.
+    ok("\\\\?\\ prefix is refused",
+       code_of(lambda: ol._norm_target("\\\\?\\C:\\out\\x.png", "png")) == "bad_path")
+    ok("\\\\.\\ device path is refused",
+       code_of(lambda: ol._norm_target("\\\\.\\NUL", "png")) == "bad_path")
+    ok("drive-relative c:d.png is refused",
+       code_of(lambda: ol._norm_target("c:d.png", "png")) == "bad_path")
+    ok("a:b.png is refused rather than resolving to A:\\b.png",
+       code_of(lambda: ol._norm_target("a:b.png", "png")) == "bad_path")
+    ok("a real drive path is still fine",
+       ol._norm_target("C:\\out\\x.png", "png") == "C:\\out\\x.png")
+    long_path = os.path.join(BASE, "d" * 120, "e" * 120, "x.png")
+    ok("over-long path is refused with the length",
+       code_of(lambda: ol._norm_target(long_path, "png")) == "bad_path")
+
     # ------------------------------------------------------------- writability
     ok("unmapped drive is bad_path",
        code_of(lambda: ol._prepare_write(ol._norm_target(r"Q:\nope\x.png"))) == "bad_path")

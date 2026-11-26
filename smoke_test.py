@@ -149,7 +149,7 @@ def main():
 
     tools = rpc.request("tools/list").get("result", {}).get("tools", [])
     names = sorted(t["name"] for t in tools)
-    check("tools/list returns 27", len(tools) == 27, len(tools))
+    check("tools/list returns 28", len(tools) == 28, len(tools))
     check("实例治理工具已暴露", {"origin_instances", "origin_reclaim"} <= set(names),
           [n for n in names if "instance" in n or "reclaim" in n])
     # Tools that genuinely take no arguments are the only ones allowed an empty
@@ -353,10 +353,20 @@ def main():
           cr.get("preset"))
     bad = rpc.tool("origin_chart_render", {"name": preset_name,
                                            "source": os.path.join(HERE, "sample.dat"),
-                                           "x": 1, "y": 2, "output_dir": OUT})
-    check("chart_render refuses data missing the preset's columns",
+                                           "output_dir": OUT})
+    check("chart_render refuses data whose column names do not match the preset",
           not bad.get("ok") and bad.get("code") == "preset_columns_mismatch",
           (bad.get("code"), bad.get("message")))
+    # ... and x/y is the documented escape hatch: explicit columns mean the caller
+    # knows what it wants, so the name match must not block the render any more.
+    esc = rpc.tool("origin_chart_render", {"name": preset_name,
+                                           "source": os.path.join(HERE, "sample.dat"),
+                                           "x": 1, "y": 2, "output_dir": OUT})
+    check("chart_render honours explicit x/y despite the names",
+          esc.get("ok") is True and bool((esc.get("delivered") or {}).get("image")),
+          (esc.get("code"), esc.get("message"), esc.get("delivered")))
+    check("chart_render says when the preset kind was not honoured",
+          "kind_faithful" in (cr.get("preset") or {}), cr.get("preset"))
 
     gp = rpc.tool("origin_fit", {"worksheet": ws, "x": 1, "y": 2, "kind": "gauss"})
     check("fit preset resolves to an installed function", gp.get("ok") and gp.get("func") == "Gauss",

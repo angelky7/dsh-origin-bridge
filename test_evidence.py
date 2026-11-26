@@ -326,6 +326,132 @@ def test_status_is_sanitized(tmp):
           out.get("origin_version_raw") is None, out.get("origin_version_raw"))
 
 
+def code_of(fn):
+    try:
+        fn()
+    except originlab.OriginError as exc:
+        return exc.code
+    return "no-raise"
+
+
+# ------------------------------------------------ presets say what they will draw
+
+
+def test_preset_kinds():
+    """Every preset either maps to a drawable primitive or is refused by name.
+
+    Measured on the 0.4.21 tree: 23 of the 40 presets name a plot kind Origin cannot
+    draw (bar, box, radar, sankey, matrix, 3d_line…), and the code silently substituted
+    "line" — asking for a histogram delivered a line chart, or an empty one, still
+    marked proof_level "verified".
+    """
+    import templates_catalog as catalog
+    refused, drawn, wrong = [], [], []
+    for tpl in catalog.TEMPLATES:
+        try:
+            kind, note = originlab._preset_kind(tpl.get("default_plot_kind"))
+        except originlab.OriginError as exc:
+            refused.append(tpl["name"])
+            if exc.code != "preset_kind_unsupported":
+                wrong.append((tpl["name"], exc.code))
+            continue
+        drawn.append(tpl["name"])
+        if kind not in originlab.PLOT_CODES:
+            wrong.append((tpl["name"], kind))
+        requested = str(tpl.get("default_plot_kind") or "line").lower()
+        if kind != requested and requested not in originlab._PRESET_FAITHFUL and not note:
+            # A substituted kind MUST carry an explanation unless the substitution is
+            # exact (Origin's "column" IS a bar chart). That is the whole point.
+            wrong.append((tpl["name"], "silent substitution of %r" % requested))
+    check("every drawable preset maps onto a real plot type", not wrong, wrong)
+    check("no preset silently becomes a line chart", not wrong, wrong)
+    check("presets with no primitive are refused (%d)" % len(refused), len(refused) > 0,
+          len(refused))
+    check("the rest are drawable (%d)" % len(drawn), len(drawn) > 0, len(drawn))
+
+    hint = None
+    try:
+        originlab._preset_kind("radar")
+    except originlab.OriginError as exc:
+        hint = exc.next_actions
+    check("a refused kind points at the tool that can draw it",
+          bool(hint) and any("origin_" in str(h) for h in hint), hint)
+
+
+def test_chart_check_honesty():
+    """chart_check must not pass data it cannot use, and must not blame the data."""
+    ok_named = originlab.chart_check("xrd", columns=["two_theta", "intensity"])
+    check("an exact name match is ok", ok_named["status"] == "ok", ok_named)
+    check("it names which column each requirement matched",
+          ok_named["matched"] == {"two_theta": "two_theta", "intensity": "intensity"},
+          ok_named["matched"])
+
+    # Substring matching made 'x' match 'index' and 'y' match 'yield': a preset
+    # answered ok for data it could not possibly use.
+    bad = originlab.chart_check("scatter", columns=["index", "yield"])
+    check("'index' is not accepted as column x", bad["status"] != "ok", bad["status"])
+    check("and the unmatched name is reported", bool(bad["issues"]), bad["issues"])
+
+    # A correct column with units in its name still matches on its first token.
+    unit = originlab.chart_check("xrd", columns=["two_theta (deg)", "intensity (cps)"])
+    check("a suffixed name still matches", unit["status"] == "ok", unit)
+
+    empty = originlab.chart_check("xrd")
+    check("no data at all is status no_data", empty["status"] == "no_data", empty)
+    check("no data is not reported as a missing column",
+          not any("找不到" in i for i in empty["issues"]), empty["issues"])
+
+    shape = originlab.chart_check("bar", data={"category": ["A", "B"], "value": [1.0, 2.0]})
+    check("a text column is reported before the render fails",
+          any("非数值" in i for i in shape["issues"]), shape["issues"])
+    zero = originlab.chart_check("xrd", data={"two_theta": [], "intensity": []})
+    check("a 0-row column is reported", any("空的" in i for i in zero["issues"]),
+          zero["issues"])
+
+    check("preset names are case/space insensitive",
+          originlab.chart_check(" XRD ", columns=["two_theta", "intensity"])["status"] == "ok")
+
+
+def test_chart_render_refusals():
+    """The refusal cases must happen BEFORE anything touches Origin."""
+    check("no data -> bad_arguments",
+          code_of(lambda: originlab.chart_render("xrd")) == "bad_arguments")
+    text_cols = {"category": ["A", "B"], "value": [1.0, 2.0]}
+    check("an inline text column -> bad_arguments",
+          code_of(lambda: originlab.chart_render("bar", columns=text_cols)) == "bad_arguments")
+    check("a kind with no primitive -> preset_kind_unsupported",
+          code_of(lambda: originlab.chart_render("radar", columns={"a": [1.0], "b": [2.0]}))
+          == "preset_kind_unsupported")
+    check("a single-column preset asks for an explicit y instead of drawing an empty axis",
+          code_of(lambda: originlab.chart_render(
+              "histogram", columns={"value": [1.0, 2.0, 3.0]})) == "preset_needs_two_columns")
+
+
+def test_fit_linear_semantics():
+    """linear has no initial guesses, and `fixed` must actually fix."""
+
+    class StubSheet(object):
+        cols = 2
+        rows = 3
+        name = "Sheet1"
+
+        def to_list(self, col):
+            return [0.0, 1.0, 2.0]
+
+        def get_label(self, col, kind="L"):
+            return "X" if col == 0 else "Y"
+
+    sheet = StubSheet()
+    ref = originlab._bind("ws", sheet, "Sheet1")
+    try:
+        check("linear + starts is refused instead of pinning the answer",
+              code_of(lambda: originlab.fit(ref, x=1, y=2, kind="linear",
+                                            starts={"Slope": 5.0})) == "linear_ignored_starts")
+    finally:
+        originlab._handles.pop(ref, None)
+        originlab._names.pop(ref, None)
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="origin_bridge_evidence_")
     try:
@@ -338,6 +464,10 @@ def main():
         test_ownership(tmp)
         test_numpy_scalars(tmp)
         test_status_is_sanitized(tmp)
+        test_preset_kinds()
+        test_chart_check_honesty()
+        test_chart_render_refusals()
+        test_fit_linear_semantics()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if fails:

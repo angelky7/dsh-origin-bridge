@@ -29,12 +29,14 @@ for _stream in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUITES = ["test_asciiio", "test_binio", "test_lifecycle", "test_paths",
-          "test_json_safety", "test_readfile", "test_labtalk_guard", "test_evidence"]
+          "test_json_safety", "test_readfile", "test_labtalk_guard", "test_evidence",
+          "test_sheet"]
 # labels used in the READMEs -> suite module
 LABELS = {"asciiio": "test_asciiio", "binio": "test_binio",
           "lifecycle": "test_lifecycle", "paths": "test_paths",
           "json": "test_json_safety", "readfile": "test_readfile",
-          "labtalk": "test_labtalk_guard", "evidence": "test_evidence"}
+          "labtalk": "test_labtalk_guard", "evidence": "test_evidence",
+          "sheet": "test_sheet"}
 CHECK_RE = re.compile(r"^\s*(?:ok|PASS)\b", re.MULTILINE)
 problems = []
 

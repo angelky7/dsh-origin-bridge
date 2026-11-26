@@ -96,7 +96,12 @@ def main():
     strcol = rpc.tool("origin_write", {"columns": {"a": ["x", "y"]}})
     check("non-numeric data gives clean error", strcol.get("code") == "bad_arguments"
           and "a" in str(strcol.get("message")), (strcol.get("code"), str(strcol.get("message"))[:60]))
-    check("unknown extra param tolerated", rpc.tool("origin_status", {"wat": 1}).get("connected") is True, "ok")
+    # 0.4.22: an unrecognised argument is now REFUSED. Tolerating it meant a
+    # misspelled key ("colour" for "color", "xscale" for "x_scale") reached the
+    # engine, matched nothing, and changed nothing while the call looked successful.
+    unknown = rpc.tool("origin_status", {"wat": 1})
+    check("unknown extra param refused", unknown.get("code") == "unknown_arguments",
+          (unknown.get("code"), str(unknown.get("message"))[:70]))
 
     # 5) CJK + spaces in the data path (Origin/LabTalk historically choke here)
     hard = os.path.join(SANDBOX, "中文 目录 with spaces")

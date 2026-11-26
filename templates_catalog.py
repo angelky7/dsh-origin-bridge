@@ -1,7 +1,7 @@
 """
 Origin Bridge Template Catalog.
 
-A curated library of 30+ scientific chart templates inspired by the
+A curated library of 40 scientific chart templates inspired by the
 editaplot project. Each template declares:
 - name: identifier
 - category: grouping (e.g. 'spectroscopy', 'distribution')
@@ -11,13 +11,18 @@ editaplot project. Each template declares:
 - suggested_fit: 'linear' | 'gauss' | 'lorentz' | etc.
 - default_axis_titles: dict
 - default_plot_kind: 'scatter' | 'line' | 'bar' | 'bar+fit' | etc.
-- verified_on: origin version last verified
+- verified_on: the Origin build whose template library was checked for THIS
+  template's existence. It is NOT a claim that origin_chart_render can draw the
+  preset's plot kind: Origin only has line/scatter/line+symbol/column, so a preset
+  asking for box/radar/sankey/3d is refused by name (see originlab._PRESET_KINDS)
+  rather than silently drawn as a line.
 
 This module exposes:
 - TEMPLATES: list of template dicts
-- list_templates(category): names grouped by category
-- describe_template(name): return contract for one
-- validate_data_shape(name, data, columns): dry-run check
+- list_templates(category): names grouped by category (case-insensitive)
+- describe_template(name) / find_template(name): contract for one (case/space/
+  hyphen-insensitive, because the category lookup was and this was not)
+- validate_data_shape(name, data): deprecated shim over originlab.chart_check
 
 render_template used to live here too, but it called op.new() (throwing away
 whatever the user had open) and imported a fit module this package never had;
@@ -492,9 +497,10 @@ TEMPLATES: List[Dict[str, Any]] = [
 
 def list_templates(category: Optional[str] = None) -> List[Dict[str, str]]:
     """Return summary list for MCP tool."""
+    want = str(category or '').strip().lower()
     items = []
     for t in TEMPLATES:
-        if category and t['category'] != category:
+        if want and t['category'].lower() != want:
             continue
         items.append({
             'name': t['name'],
@@ -506,92 +512,50 @@ def list_templates(category: Optional[str] = None) -> List[Dict[str, str]]:
     return items
 
 
-def describe_template(name: str) -> Optional[Dict]:
-    """Return full contract for one template."""
+def find_template(name: str) -> Optional[Dict]:
+    """Look a template up the way a person types it.
+
+    Exact match first, then a case- and whitespace-insensitive one: the category
+    lookup was already case-insensitive, so `preset("XRD")` / `" xrd "` / `"uv-vis"`
+    answering "not found" while `presets("SPECTROSCOPY")` worked was an
+    inconsistency users hit constantly (measured 2026-11-26).
+    """
+    raw = str(name or '')
     for t in TEMPLATES:
-        if t['name'] == name:
+        if t['name'] == raw:
+            return t
+    key = raw.strip().lower().replace(' ', '').replace('-', '_')
+    if not key:
+        return None
+    for t in TEMPLATES:
+        if t['name'].lower().replace('-', '_') == key:
             return t
     return None
 
 
+def describe_template(name: str) -> Optional[Dict]:
+    """Return full contract for one template."""
+    return find_template(name)
+
+
 def validate_data_shape(name: str, data: Any) -> Dict[str, Any]:
-    """Dry-run check: does the data have the required shape?
+    """Deprecated shim: the engine's chart_check is the one validator.
 
-    Args:
-        name: template name
-        data: either a file path (.dat/.csv/.xlsx) or a 2D nested list
-    Returns:
-        dict with status, issues, columns_detected, fit
+    This used to be a second, differently-implemented copy of the column matching
+    (substring here, token matching in originlab.chart_check), and it imported
+    `from .io import ...` — a relative import inside a top-level module, so calling
+    it raised ImportError (measured 2026-11-26). Nothing called it. Two validators
+    that disagree are how "the check said ok and the render failed" happens, so this
+    now delegates instead of re-deciding.
     """
-    tpl = describe_template(name)
-    if tpl is None:
-        return {'status': 'error', 'message': f'unknown template: {name}'}
-
-    result = {
-        'status': 'ok',
-        'template': name,
-        'required_columns': tpl['required_columns'],
-        'suggested_fit': tpl['suggested_fit'],
-        'issues': [],
-    }
-
-    # Detect data shape
-    columns_detected = []
-    n_rows = 0
-
-    if isinstance(data, str):
-        # File path
-        from .io import read_dat, read_csv, read_excel
-        ext = os.path.splitext(data)[1].lower()
-        try:
-            if ext == '.dat':
-                longs, _, d = read_dat(data)
-                columns_detected = longs
-                n_rows = d.shape[0]
-            elif ext in ('.csv', '.tsv'):
-                import pandas as pd
-                sep = '\t' if ext == '.tsv' else ','
-                df = pd.read_csv(data, sep=sep)
-                columns_detected = list(df.columns)
-                n_rows = len(df)
-            elif ext in ('.xlsx', '.xls'):
-                import pandas as pd
-                df = pd.read_excel(data)
-                columns_detected = list(df.columns)
-                n_rows = len(df)
-            else:
-                result['status'] = 'error'
-                result['issues'].append(f'unsupported file type: {ext}')
-        except Exception as e:
-            result['status'] = 'error'
-            result['issues'].append(f'failed to read: {e}')
-    elif isinstance(data, list):
-        # 2D list
-        n_rows = len(data)
-        if data and isinstance(data[0], list):
-            # First row might be headers
-            n_cols = max(len(r) for r in data)
-            # No header info — just generic col_N
-            columns_detected = [f'col{i}' for i in range(n_cols)]
+    try:
+        import originlab
+    except Exception:                 # catalog used on its own, without the engine
+        return {'status': 'unavailable', 'template': name,
+                'message': 'use originlab.chart_check(name, data=...) instead'}
+    columns = None
+    if isinstance(data, (list, tuple)):
+        columns = [str(c) for c in data]
     elif isinstance(data, dict):
-        columns_detected = list(data.keys())
-        n_rows = max((len(v) for v in data.values()), default=0)
-
-    result['columns_detected'] = columns_detected
-    result['n_rows'] = n_rows
-
-    # Check required columns
-    if tpl['required_columns']:
-        cd_lower = [c.lower() for c in columns_detected]
-        for req in tpl['required_columns']:
-            # Loose match: ignore underscores and case
-            req_norm = req.lower().replace('_', '')
-            if not any(c.lower().replace('_', '').find(req_norm) >= 0 for c in columns_detected):
-                result['issues'].append(f'missing required column: {req}')
-
-    if result['issues']:
-        result['status'] = 'warning'
-
-    return result
-
-
+        columns = list(data)
+    return originlab.chart_check(name, data=None if columns else data, columns=columns)

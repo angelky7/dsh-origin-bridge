@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: install test dependencies
-        run: python -m pip install --upgrade pip numpy
+        run: python -m pip install --upgrade pip numpy pyyaml
       - name: asciiio parser
         run: python test_asciiio.py
       - name: binio workstation reader
@@ -48,16 +48,26 @@ jobs:
         run: python test_evidence.py
       - name: README coverage claims match the measured suites
         run: python check_claims.py
-      - name: server advertises all 27 tools
+      - name: server advertises all 28 tools
         run: |
           $n = (python server.py --tools | Measure-Object -Line).Lines
           Write-Host "tools: $n"
-          if ($n -ne 27) { exit 1 }
+          if ($n -ne 28) { exit 1 }
       # 随包发布的启动器是最难被用户看见的一部分：它在机器上找不到能用的解释器时
       # 只回一个退出码，客户端看到的就是“桥挂了”。--check 不启动 MCP、不启动 Origin，
       # 只验证“选了哪个解释器 + server.py 可读 + numpy 可导入”，让它也进 CI。
       - name: shipped node launcher can find an interpreter
         run: node bin/origin-bridge.mjs --check
+      # 补丁里的 profile 路径必须来自宿主（ctx.get('profileContext').dir），不能写死：
+      # 实测装进 web profile 时写死的 desktop 路径让 python 起不来、failOnStartupError
+      # 又把错误吞掉，结果是 28 个工具全消失而插件卡片仍显示已安装。check_patch.py 把
+      # 这条（以及两个 insert 是否都在）钉住，用户也能拿它自检自己的补丁。
+      - name: bundle patch resolves the profile where the host says
+        run: python check_patch.py
+      # 安装器用 PyYAML 校验写进去的 YAML；requirements.txt 里已经有了，这条确认它没被删掉，
+      # 否则安装脚本会静默降级成“没校验”。
+      - name: installer self-check has PyYAML available
+        run: python -c "import yaml; print('pyyaml', yaml.__version__)"
       # 版本号在两处写死（package.json 与 server.py 的 SERVER_VERSION）：发版时漏改一处，
       # npm 包版本就和 MCP serverInfo 版本静默漂移，而上面所有套件都不会发现。两条断言
       # 各自独立成 step —— 本仓库踩过“pwsh 多命令步骤中间失败不红”的坑（见 0.4.14 的叙述），

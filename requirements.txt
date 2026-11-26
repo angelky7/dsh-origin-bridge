@@ -2,3 +2,8 @@
 # originpro 要求 Origin 2021+；2.x 没有验证过，暂不设上限。
 originpro>=1.1.0
 numpy>=1.24
+
+# install_dsh.ps1 装完会用 PyYAML 校验写进去的 cordis.patch.yml；没有它脚本只能
+# 降级成一条"没校验"的警告（写坏了要你手工从备份恢复）。originpro 不会带这个依赖，
+# 所以放在这里。只装运行桥的话它不是必需的。
+pyyaml>=6.0

@@ -17,9 +17,20 @@
 #   manual install -> set ORIGIN_BRIDGE_HOME to the folder holding server.py
 #   interpreter    -> set ORIGIN_BRIDGE_PYTHON to your venv python.exe
 #
+# The profile dir MUST come from the host, not from a literal. It used to be
+# '.../profiles/desktop/node_modules/dsh-origin-bridge', which is wrong the moment
+# the plugin is installed into any other profile: measured 2026-11-26, installed into
+# `web`, python exited with "can't open file '.../profiles/desktop/.../server.py'",
+# failOnStartupError:false downgraded that to a log line the UI never shows, dsh came
+# up normally, and the session had ZERO origin tools while the plugin card said
+# installed. `ctx.get('profileContext').dir` is the host-provided answer (verified
+# against dsh 0.2.2-rc.5: it resolves to `<DSH_HOME>/profiles/web` and registers all
+# 28 tools). Note process.env.DSH_PROFILE / DSH_HOME are NOT set for the host process
+# by dsh itself, so they cannot be used as the primary source here.
+#
 # failOnStartupError: false keeps dsh bootable when this entry cannot start at all —
 # measured (2026-10-19) that means only a missing interpreter: the default command is
-# `python` from PATH. A missing originpro does NOT hide the tools: all 27 still
+# `python` from PATH. A missing originpro does NOT hide the tools: all 28 still
 # register and every call answers `missing_originpro` with the fix to run. Origin
 # itself being closed is irrelevant to startup — the COM connection is made lazily
 # inside the first tool call, not here.
@@ -35,15 +46,18 @@
           - '-u'
           - '-X'
           - utf8
-          - !!js (process.env.ORIGIN_BRIDGE_HOME || (String(process.env.DSH_HOME || (String(process.env.USERPROFILE) + '/.dsh')) + '/profiles/desktop/node_modules/dsh-origin-bridge')) + '/server.py'
+          - !!js (process.env.ORIGIN_BRIDGE_HOME || (ctx.get('profileContext').dir + '/node_modules/dsh-origin-bridge')) + '/server.py'
         env:
           PYTHONIOENCODING: utf-8
           PYTHONUNBUFFERED: '1'
         failOnStartupError: false
         toolCallTimeoutMs: 180000
-    # Self-mount. dsh's plugin market decides "live / restart pending" by looking
-    # for this bundle's package name among the loaded entry names. Without this
-    # row the only entry name is @deepseek-ai/dsh-mcp-client, so the market shows
-    # "restart to apply" forever even after a restart. index.js apply() is a no-op.
+    # Self-mount: makes the plugin show up as its own card (dsh-origin-bridge, with
+    # icon.svg and locale/*.json) in dsh's plugin settings instead of only as a tag
+    # under the @deepseek-ai/dsh-mcp-client card. index.js apply() is a no-op.
+    # Measured 2026-11-26 against dsh 0.2.2-rc.5: removing this row still registers
+    # all tools and still reports installed/enabled, so it is cosmetic — the earlier
+    # claim here ("the market shows restart-to-apply forever without it") did not
+    # hold up.
     - id: dsh-origin-bridge
       name: dsh-origin-bridge

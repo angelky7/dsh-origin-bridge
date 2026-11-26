@@ -5,6 +5,11 @@ protocol dsh's @deepseek-ai/dsh-mcp-client speaks — can list and call our tool
 
     pip install "mcp>=1.0"
     python client_check.py
+
+The MCP SDK is NOT in requirements.txt: it is only needed by this check, and the
+bridge itself deliberately speaks raw newline-delimited JSON-RPC (see server.py's
+docstring for why). Calling this on a plain plugin environment used to raise a bare
+ModuleNotFoundError traceback, so the import below explains itself instead.
 """
 
 import asyncio
@@ -23,10 +28,25 @@ for _stream in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-
-async def main():
+try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+    HAVE_MCP = True
+    MCP_IMPORT_ERROR = ""
+except ImportError as _exc:                  # Python deletes the binding at block end
+    HAVE_MCP = False
+    MCP_IMPORT_ERROR = str(_exc)
+
+
+async def main():
+    if not HAVE_MCP:
+        print("client_check.py needs the official MCP SDK, which is not a bridge "
+              "dependency (the bridge talks raw JSON-RPC on purpose).", file=sys.stderr)
+        print("  install it:  python -m pip install \"mcp>=1.0\"", file=sys.stderr)
+        print("  crash was:   %s" % (MCP_IMPORT_ERROR,), file=sys.stderr)
+        print("  smoke_test.py covers the same protocol ground without it.",
+              file=sys.stderr)
+        return 2
 
     failed = []
 
@@ -89,4 +109,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()) or 0)

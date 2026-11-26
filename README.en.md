@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 tools · <b>614/614 shipped checks passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
+  <sub>28 tools · <b>777/777 shipped checks passing</b> · data never leaves the machine · workstation <code>.txt</code> / <code>.bin</code> supported</sub>
 </p>
 
 <p align="center">
   <a href="#requirements"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-614%2F614%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-777%2F777%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -33,7 +33,7 @@ Not "the Origin MCP with the most tools" — the one you can trust on real lab d
 2. **Never report success it cannot prove.** A write either reads evidence back or fails/degrades honestly; `unknown` stays `unknown`. "The request was sent" is never treated as "the thing was done".
 3. **Fail closed on lifecycle.** Session lock, instance ownership, exit, timeouts: when in doubt, refuse or report — never guess, never silently replay a write, never kill an instance whose ownership is unproven.
 4. **Never touch what is the user's.** A windowed Origin is never killed; read-only files are never overwritten; test data and prompts are never uploaded or shipped.
-5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and **614** offline/edge checks ship inside the package for anyone to re-run.
+5. **Numbers must be reproducible.** Every coverage number in this README is checked by `check_claims.py`, and **777** offline/edge checks ship inside the package for anyone to re-run.
 
 **Explicit non-goals:** a tool-count race, cloud rendering, rewriting Origin itself. A single COM worker is a deliberate choice — no multi-worker complexity unless measurement proves COM cannot be isolated.
 
@@ -49,8 +49,8 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 
 - **Data never leaves the machine.** No API keys, no cloud component. dsh starts a local Python process that drives the Origin on your machine through OriginLab's official [`originpro`](https://pypi.org/project/originpro/) package.
 - **Every step carries evidence.** Origin's X-Functions routinely "succeed" without doing anything. Here, plotting reads the axis range back and compares it against the data span; exporting verifies existence, size and the file-header magic; styling is read back item by item — anything that cannot be read back lands in a `failed` list instead of pretending to succeed.
-- **27 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
-- **614 shipped checks, not a claim.** Eight Origin-free suites (asciiio 137, binio 26, lifecycle 115, paths 35, json 45, readfile 12, labtalk 33, evidence 41) plus two real-Origin suites (smoke 129, edge 41) **ship inside the package and you can re-run every one of them**; `check_claims.py` re-measures them and holds every number in this README to the measurement. The numbers here all come from actual runs: 444 offline checks on an interpreter **without Origin**, smoke and edge on a real OriginPro 2024 + originpro 1.1.15 (**129/129, 41/41** — and the edge case "the shipped launcher can start the server" was RED on the 0.4.19 tree). A **1139-case full-chain bank** also exists as a development-side asset (`cases/` + `run_cases.py`, prompts and synthetic data, not distributed); it was last fully green in the 0.4.19 round and has not been re-run since because it lives outside this repository — every regression added here landed in the shipped suites above instead. originpro's dozen-plus documented traps are all recorded and worked around.
+- **28 tools, not 74.** Each one has a measured use, and each description states its measured limits, so the model does not step into traps.
+- **777 shipped checks, not a claim.** Nine Origin-free suites (asciiio 137, binio 26, lifecycle 142, paths 62, json 55, readfile 12, labtalk 33, evidence 61, sheet 75) plus two real-Origin suites (smoke 133, edge 41) **ship inside the package and you can re-run every one of them**; `check_claims.py` re-measures them and holds every number in this README to the measurement. The numbers here all come from actual runs: 603 offline checks on an interpreter **without Origin**, smoke and edge on a real OriginPro 2024 + originpro 1.1.15 (**133/133, 41/41** — and the edge case "the shipped launcher can start the server" was RED on the 0.4.19 tree). A **1139-case full-chain bank** also exists as a development-side asset (`cases/` + `run_cases.py`, prompts and synthetic data, not distributed); it was last fully green in the 0.4.19 round and has not been re-run since because it lives outside this repository — every regression added here landed in the shipped suites above instead. originpro's dozen-plus documented traps are all recorded and worked around.
 
 ## What it can do
 
@@ -64,6 +64,8 @@ Existing attempts at wiring Origin into chat either upload your data to a cloud 
 | "Workstation txt export with a wall of parameters first" | `origin_import` skips the header, treats the row next to the data (`Potential/V, Current/A`) as column names, splits units into column Units, keeps parameters in `metadata` |
 | "Make an XPS figure" | `origin_chart_render` (40 scientific presets: axis titles / plot kind / suggested fit) |
 | "Show this matrix as a heatmap" | `origin_matrix` (heat_map / cmap / mesh / contline, Origin's own templates) |
+| "Export the data in Book1 as a CSV for me" | `origin_read_sheet` (read every column back, write the whole sheet as csv and check it by re-reading; Origin's own expASC cannot be driven — see below) |
+| "Did that column I just wrote actually land?" | `origin_read_sheet` (column kinds / filled rows / first values, missing as null) |
 
 Sources: `.dat` `.csv` `.txt` `.tsv` (`origin_read_file` parses these only; `.xls/.xlsx/.wks` are refused with `unsupported_file_type` pointing at `origin_import`; delimiter sniffing; encodings UTF-8 / GBK / **UTF-16 with or without BOM** / cp1252; multi-row headers; Fortran exponents; `NA`/`-`; decorated numbers like `<0.001`, `2.5±0.1`, `25 mV`, `1,234.5`, `(500)`, `2.5*` — each unwrapping states in `warnings` what it substituted), `.xls` `.xlsx`, electrochemical-workstation `.txt` exports (CH Instruments and friends; the parameter preamble lands in `metadata`), and workstation binary `.bin` files whose header starts `80 F2 1B 00`.
 
@@ -99,7 +101,7 @@ pip install originpro numpy
 
 Two failure modes behave differently (measured, do not guess):
 
-- **Interpreter present, `originpro` missing**: all 27 tools still register, and every call returns `code=missing_originpro` with the reason and `isError: true` — visible and actionable.
+- **Interpreter present, `originpro` missing**: all 28 tools still register, and every call returns `code=missing_originpro` with the reason and `isError: true` — visible and actionable.
 - **No `python` on PATH** (the patch's default command): the bridge process never starts. `failOnStartupError: false` keeps dsh alive, but that round has **no tools registered and no error**. Set `ORIGIN_BRIDGE_PYTHON` first.
 
 Origin not running does **not** affect registration: the COM connection is built on the first tool call.
@@ -117,7 +119,7 @@ setx ORIGIN_BRIDGE_PYTHON "C:\path\to\.venv\Scripts\python.exe"
 setx ORIGIN_BRIDGE_HOME   "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-origin-bridge"
 ```
 
-Fully quit dsh and reopen; in a new chat say "list tools whose names contain origin" — you should see the 27 `mcp__origin_bridge__origin_*` tools. Uninstall: `dsh plugin --profile desktop remove dsh-origin-bridge`.
+Fully quit dsh and reopen; in a new chat say "list tools whose names contain origin" — you should see the 28 `mcp__origin_bridge__origin_*` tools. Uninstall: `dsh plugin --profile desktop remove dsh-origin-bridge`.
 
 ### Any other stdio MCP client (Claude Desktop, Cursor, Codex…)
 
@@ -135,28 +137,33 @@ pip install -r requirements.txt
 The Origin-free suites run anywhere; `smoke_test.py` and `edge_checks.py` drive a real Origin:
 
 ```powershell
-.\.venv\Scripts\python.exe smoke_test.py              # 129 checks, needs Origin
+.\.venv\Scripts\python.exe smoke_test.py              # 133 checks, needs Origin
 .\.venv\Scripts\python.exe edge_checks.py             # 41 checks, needs Origin
 .\.venv\Scripts\python.exe test_asciiio.py            # 137 checks, Origin-free
 .\.venv\Scripts\python.exe test_binio.py              # 26 checks, Origin-free; cross-checks point-for-point against a vendor .txt when one exists
-.\.venv\Scripts\python.exe test_lifecycle.py          # 115 checks, Origin-free
-.\.venv\Scripts\python.exe test_evidence.py           # 41 checks, Origin-free: a stale file is not evidence, freshness of the '#'-renamed candidate, empty names on close_pages, no ownership claimed when the probe failed
-.\.venv\Scripts\python.exe test_paths.py              # 35 checks, Origin-free
-.\.venv\Scripts\python.exe test_json_safety.py        # 43 checks, Origin-free
+.\.venv\Scripts\python.exe test_lifecycle.py          # 142 checks, Origin-free
+.\.venv\Scripts\python.exe test_evidence.py           # 61 checks, Origin-free: a stale file is not evidence, freshness of the '#'-renamed candidate, empty names on close_pages, no ownership claimed when the probe failed
+.\.venv\Scripts\python.exe test_paths.py              # 62 checks, Origin-free
+.\.venv\Scripts\python.exe test_json_safety.py        # 55 checks, Origin-free
 .\.venv\Scripts\python.exe test_readfile.py           # 12 checks, Origin-free
+.\.venv\Scripts\python.exe test_sheet.py              # 75 checks, Origin-free: reading a worksheet back out and proving the data file it writes
 .\.venv\Scripts\python.exe test_labtalk_guard.py      # 33 checks, Origin-free
 .\.venv\Scripts\python.exe check_claims.py            # re-measures the suites and holds the README counts to them (CI runs it too)
+.\.venv\Scripts\python.exe check_patch.py             # validates cordis.patch.yml (both inserts present, profile path from the host)
 ```
+
+`requirements.txt` carries `pyyaml` next to `originpro`/`numpy` because the installer uses it to validate the YAML it writes into your profile; without it the installer can only warn that nothing was validated. To verify with the **official MCP SDK** instead of the raw JSON-RPC client here, `pip install "mcp>=1.0"` and run `python client_check.py` — it is intentionally not a bridge dependency, and it now says so instead of raising a bare ModuleNotFoundError.
 
 For dsh registration from a source checkout, run `install_dsh.ps1` (backs up your profile patch, writes the insert block, validates the YAML afterwards) — see the [Chinese README](README.md) for the manual YAML and the three things that must be exactly right.
 
-## The 27 tools
+## The 28 tools
 
 | Tool | Purpose |
 |---|---|
 | `origin_status` | Connection check, Origin version, open pages. **Call this first** |
 | `origin_read_file` | Parse a file without touching Origin: encoding, delimiter, header rows, per-column long name/units/valid rows, a 3-value `sample` per column; refuses `.xls/.xlsx/.wks`; `.bin` gets the technique/points/method/axis-source route |
 | `origin_import` | Import `.dat/.csv/.txt/.tsv/.xls/.xlsx/.wks` and workstation `.bin`; returns a `ws-N` handle and the column list |
+| `origin_read_sheet` | **The reverse of import**: read the data back out of a worksheet — long names/units/display formats/column kinds (numeric, text, mixed, empty)/filled rows, plus the first `rows` values (1–200, missing as null); give `path` to write the whole sheet as csv/tsv/txt and have it **read back and checked** (header, row count, every row's width, sampled cells), with byte count and sha256 |
 | `origin_write` | Build a sheet from inline data: `columns={name:[values…]}` or `headers`+`rows` |
 | `origin_formula` | Set a column formula (Fx); returns computed rows and first/last values |
 | `origin_plot` | Single or **multiple** curves; `template` uses Origin's own graph templates; `graph`+`layer` plots into a named layer |
@@ -204,7 +211,7 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 
 | Symptom | First check |
 |---|---|
-| Tools missing in dsh | Is the block a `- insert:` entry; is `name:` exactly `@deepseek-ai/dsh-mcp-client`; did you fully restart dsh; does `python server.py --tools` list 27 |
+| Tools missing in dsh | Is the block a `- insert:` entry; is `name:` exactly `@deepseek-ai/dsh-mcp-client`; did you fully restart dsh; does `python server.py --tools` list 28 |
 | `connection_error` | Origin ≥ 2021? `pip show originpro`? Exactly one `Origin64.exe` in Task Manager? |
 | "Instance limit exceeded" | `origin_instances` to see them, `origin_reclaim` to close windowless leftovers; windows with titles may be your own unsaved work |
 | `import_empty` | `origin_read_file` first; space-aligned and multi-header files are handled, so this means the file truly has no numeric rows |
@@ -214,6 +221,13 @@ Files whose header starts `80 F2 1B 00` and name `Cyclic Voltammetry` / `A.C. Im
 | `bad_path` / `target_locked` | The path is wrong (directory as filename, unmapped drive) or the target exists read-only; the bridge will not overwrite |
 | `origin_busy` | Another bridge session holds Origin (lock at `%LOCALAPPDATA%\origin-bridge\session.lock`). Wait for it, or delete the lock file if it is wedged |
 | Install fails `ERR_PNPM_NO_MATCHING_VERSION` | Mirror lag: add `--registry=https://registry.npmjs.org/` once, or use a `file:` offline bundle |
+| Installed, but zero `origin_*` tools (any profile but desktop) | Run `python check_patch.py` on the profile patch: the `server.py` path must come from `ctx.get('profileContext').dir`. A hardcoded `profiles/desktop` makes every other profile lose all tools silently, because `failOnStartupError: false` downgrades "cannot open server.py" to a log line the UI never shows. Patches from ≤0.4.21 hardcode it |
+| The installer says "already installed" but there are no tools | `install_dsh.ps1` used to match the entry id as a substring of the whole file, so its own comment lines counted as the entry and it wrote nothing, exit 0. 0.4.22 anchors the match to a real YAML line and validates the result with PyYAML, rolling back from a backup on failure |
+| `unknown_arguments` | A misspelled argument name (`colour` for `color`, `xscale` for `x_scale`). Since 0.4.22 these are refused with the list of allowed names — before, they were accepted and changed nothing, which looked like a successful call |
+| `plot_empty_column` | The y column has no numeric value (text, or empty). It used to draw an empty 0..10 axis labelled `verified`; `origin_read_sheet` shows what is really in the column |
+| `preset_kind_unsupported` | The preset's plot kind cannot be drawn here (box / radar / sankey / 3d…). The error names the tool that can (`origin_matrix`, `origin_layer`+`origin_plot`, `origin_fit`). For line/scatter/bar, pass `plot_type=` |
+| `linear_ignored_starts` | `origin_fit(kind="linear")` has no initial guesses; `starts` used to be applied as a pin. Use `fixed={"Intercept": 0}` to fix a parameter, or a nonlinear `kind=nlfitsing` to set starts |
+| `client_check.py` says `No module named 'mcp'` | That check drives the official MCP SDK, which the bridge deliberately does not use. `python -m pip install "mcp>=1.0"`; `smoke_test.py` covers the same protocol ground without it |
 | `export_unverified` / `save_unverified` | Origin said success but the target file did not change — usually because a **previous** figure/project already sits at that path. Use a new name (a timestamp is easiest) or delete the old file; it may also be open in an image viewer, Origin, or a sync client and refused an overwrite |
 | `origin_instances` reports `ownership: "uncertain"` | The pre-connect process probe failed (powershell blocked by AV, or timed out), so this session claims **no** instances and `origin_exit` answers `foreign_instance`. If you know the instance is the bridge's own, `origin_exit(force=true)`; a fresh dsh with a working probe clears it |
 | `origin_close_pages(names=[])` closed nothing | Intended: an empty list means "nothing selected". Omit `names` to close every page of that kind, and check `dry_run: true` / `would_close` first |

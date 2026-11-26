@@ -15,12 +15,12 @@
 </p>
 
 <p align="center">
-  <sub>27 个工具 · <b>614 项随包检查全部实测通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
+  <sub>28 个工具 · <b>777 项随包检查全部实测通过</b> · 数据不出本机 · 支持工作站 <code>.txt</code> / <code>.bin</code></sub>
 </p>
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-614%2F614%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-777%2F777%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
   <a href="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml"><img alt="offline checks" src="https://github.com/angelky7/dsh-origin-bridge/actions/workflows/offline-checks.yml/badge.svg"></a>
 </p>
@@ -41,7 +41,7 @@
 2. **不谎报成功。** 写操作要么读回证据，要么明确失败/降级；`unknown` 就说 `unknown`，绝不把"请求发出去了"当成"事情做成了"。
 3. **生命周期 fail-closed。** 会话锁、实例归属、退出、超时：拿不准就拒绝或如实报告，不猜、不静默重试写操作、不杀归属不明的进程。
 4. **不碰用户的东西。** 有窗口的 Origin 永远不动；只读文件不覆盖；测试数据与提示词不上传、不进包。
-5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 **614 项**离线/边界检查，任何人都能复跑。
+5. **数字可复跑。** README 里的覆盖数字由 `check_claims.py` 对账；随包附 **777 项**离线/边界检查，任何人都能复跑。
 
 **明确的非目标**：工具数量竞赛、云端渲染、改写 Origin 本身。单 COM worker 是当前的有意选择——除非实测证明它隔离不了，否则不引入多 worker 的复杂度。
 
@@ -57,8 +57,8 @@
 
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
-- **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **614 项随包检查，不是自称。** 八个离线套件（asciiio 137、binio 26、lifecycle 115、paths 35、json 45、readfile 12、labtalk 33、evidence 41）加两个真机套件（smoke 129、edge 41）**随包发布，你可以直接复跑**，本文里每一个数字都由 `check_claims.py` 重新跑一遍再对账。这一版的数字全部来自实际运行：离线 444 项在**没有 Origin** 的解释器上跑，smoke 与 edge 在装好的 OriginPro 2024 + originpro 1.1.15 上跑（**129/129、41/41**，其中 edge 里"随包启动器能拉起 server"这一条在 0.4.19 的机器上是红的）。另有开发侧资产一套 **1139 例全链路题库**（`cases/` + `run_cases.py`，含提示词与模拟数据，不随包分发）——它最后一次全绿是 0.4.19 那一轮；**本版没有复跑它**，因为它在仓库之外，本版所有新增回归都落在上面那两个随包套件里。originpro 的十几个文档陷阱全部记录在案并绕开。
+- **不是 74 个工具，是 28 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
+- **777 项随包检查，不是自称。** 九个离线套件（asciiio 137、binio 26、lifecycle 142、paths 62、json 55、readfile 12、labtalk 33、evidence 61、sheet 75）加两个真机套件（smoke 133、edge 41）**随包发布，你可以直接复跑**，本文里每一个数字都由 `check_claims.py` 重新跑一遍再对账。这一版的数字全部来自实际运行：离线 603 项在**没有 Origin** 的解释器上跑，smoke 与 edge 在装好的 OriginPro 2024 + originpro 1.1.15 上跑（**133/133、41/41**，其中 edge 里"随包启动器能拉起 server"这一条在 0.4.19 的机器上是红的）。另有开发侧资产一套 **1139 例全链路题库**（`cases/` + `run_cases.py`，含提示词与模拟数据，不随包分发）——它最后一次全绿是 0.4.19 那一轮；**本版没有复跑它**，因为它在仓库之外，本版所有新增回归都落在上面那两个随包套件里。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -72,6 +72,8 @@
 | "这是工作站导出的 txt，前面一大段参数" | `origin_import` 自动跳过参数头，紧贴数据的那行（`Potential/V, Current/A`）当表头，单位拆到列的 Units 里，参数进 `metadata` |
 | "做一张 XPS 图" | `origin_chart_render`（40 个科研预设：轴标题/图类型/建议拟合） |
 | "热力图显示这个矩阵" | `origin_matrix`（heat_map / cmap / mesh / contline，Origin 自带图模） |
+| "把这个工程里 Book1 的数据导成 CSV 给我" | `origin_read_sheet`（读回每列 + 整表写 csv 并回读核对；Origin 自带的 expASC 走不通，见下文） |
+| "我刚写进去的那列，到底在不在？" | `origin_read_sheet`（列类型/有效行数/前几行值，缺值为 null） |
 
 数据源支持：`.dat` `.csv` `.txt` `.tsv`（`origin_read_file` 只读这些文本类；`.xls/.xlsx/.wks` 会明确报 `unsupported_file_type` 让你改用 `origin_import`。自动嗅探分隔符；编码覆盖 UTF-8 / GBK / **UTF-16（有无 BOM 都行）** / cp1252；多行表头、Fortran 指数、`NA`/`-`；还有 `<0.001` 检出限、`2.5±0.1`、`25 mV`、`1,234.5`、`(500)`、`2.5*` 这类被装饰过的数值——每解一种都会在 `warnings` 里写清代入了什么）、`.xls` `.xlsx`、电化学工作站（CH Instruments 等）导出的 `.txt`（几十行仪器说明自动收进 `metadata`，不会把首行日期当成列名），以及头部为 `80 F2 1B 00` 的电化学工作站二进制 `.bin`。
 
@@ -110,7 +112,7 @@ pip install originpro numpy        # 国内网络慢就加 -i https://pypi.tuna.
 ```
 
 > **前置缺了会怎样，两种情况不一样**（2026-10-19 实测，别猜）：
-> - **解释器在、`originpro` 不在**：27 个工具**照常注册**，每一次调用都返回 `code=missing_originpro` 和原因（`No module named 'originpro'`），`isError: true`——看得见、知道修什么。
+> - **解释器在、`originpro` 不在**：28 个工具**照常注册**，每一次调用都返回 `code=missing_originpro` 和原因（`No module named 'originpro'`），`isError: true`——看得见、知道修什么。
 > - **PATH 上没有 `python`**（补丁默认命令就是 `python`）：桥进程起不来，`failOnStartupError: false` 保证 dsh 照常启动，代价是那一轮**工具完全不注册**、也没有报错。这时先设 `ORIGIN_BRIDGE_PYTHON`。
 >
 > Origin 没开**不影响**注册：COM 连接是第一次工具调用时才建立的。
@@ -132,9 +134,12 @@ setx ORIGIN_BRIDGE_HOME   "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-o
 
 ```powershell
 Test-Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-origin-bridge\server.py"
+python check_patch.py "C:\Users\<你>\.dsh\profiles\desktop\cordis.patch.yml"
 ```
 
-彻底退出 dsh 再打开，新会话里说"列出 origin 开头的工具"，应看到 27 个 `mcp__origin_bridge__origin_*`。卸载：
+`check_patch.py` 是随包发布的小工具（只依赖 PyYAML）：它核对补丁里两个 insert 都在、并且 `server.py` 的路径来自宿主 `ctx.get('profileContext').dir`。**这一条很重要**：≤0.4.21 的补丁把 `profiles/desktop` 写死了，装进 `web` 或自定义 profile 时 python 打不开 server.py，`failOnStartupError: false` 又把这个错误降级成界面看不到的一行日志，结果是 dsh 正常启动、**一个 origin 工具都没有**，而插件卡片还写着"已安装"。现在换成宿主给的目录，任何 profile 都对。
+
+彻底退出 dsh 再打开，新会话里说"列出 origin 开头的工具"，应看到 28 个 `mcp__origin_bridge__origin_*`。卸载：
 
 ```bash
 dsh plugin --profile desktop remove dsh-origin-bridge
@@ -154,19 +159,25 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 先确认能独立跑通（会自己拉起 Origin）：
 
 ```powershell
-.\.venv\Scripts\python.exe smoke_test.py              # 129 项，看到 ALL GOOD 才算过
+.\.venv\Scripts\python.exe smoke_test.py              # 133 项，看到 ALL GOOD 才算过
 .\.venv\Scripts\python.exe edge_checks.py             # 41 项边界
 .\.venv\Scripts\python.exe test_asciiio.py            # 137 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py              # 26 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-.\.venv\Scripts\python.exe test_lifecycle.py          # 115 项，不需要 Origin：实例分类/归属回收/掉线重连/超时取消/退出核实/会话锁的安全边界
-.\.venv\Scripts\python.exe test_evidence.py           # 41 项，不需要 Origin：读回证据（旧文件不算证据）/改名候选的新鲜度/close_pages 空名单/探测失败时不认领实例
-.\.venv\Scripts\python.exe test_paths.py              # 35 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
-.\.venv\Scripts\python.exe test_json_safety.py        # 43 项，不需要 Origin：返回值必须是严格 JSON，工具载荷自己的 JSON 也要严格
+.\.venv\Scripts\python.exe test_lifecycle.py          # 142 项，不需要 Origin：实例分类/归属回收/掉线重连/超时取消/退出核实/会话锁的安全边界
+.\.venv\Scripts\python.exe test_evidence.py           # 61 项，不需要 Origin：读回证据（旧文件不算证据）/改名候选的新鲜度/close_pages 空名单/探测失败时不认领实例
+.\.venv\Scripts\python.exe test_paths.py              # 62 项，不需要 Origin：导出/保存目标路径的规范化与拒绝
+.\.venv\Scripts\python.exe test_json_safety.py        # 55 项，不需要 Origin：返回值必须是严格 JSON，工具载荷自己的 JSON 也要严格
 .\.venv\Scripts\python.exe test_readfile.py        # 12 项，不需要 Origin：read_file 的 sample 与二进制表格拒绝
+.\.venv\Scripts\python.exe test_sheet.py              # 75 项，不需要 Origin：读回工作表 + 写出去的数据文件回读核对
 .\.venv\Scripts\python.exe test_labtalk_guard.py    # 33 项，不需要 Origin：LabTalk 黑名单匹配
+.\.venv\Scripts\python.exe check_patch.py             # 校验 cordis.patch.yml（两个 insert 都在、profile 路径来自宿主）
 ```
 
-上面这 614 项随包发布，你可以自己复跑。那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；它的最后一次全绿是 0.4.19 那轮，此后没有再复跑过它（不在本仓库里）。这一版的所有数字都是上面那两组套件的实际运行结果。
+> `requirements.txt` 里除 `originpro` / `numpy` 还带 `pyyaml`：安装器要拿它校验写进 profile 的 YAML。少了它安装器只能降级成"没校验"并警告，所以别删。
+>
+> 想让**官方 MCP SDK**（而不是这里的裸 JSON-RPC 客户端）验证一遍：`pip install "mcp>=1.0"` 再 `python client_check.py`。它不在 requirements 里是有意的（桥本身不依赖 SDK）；没装时会给出可读的安装提示而不是 traceback。
+
+上面这 777 项随包发布，你可以自己复跑。那 **1139 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；它的最后一次全绿是 0.4.19 那轮，此后没有再复跑过它（不在本仓库里）。这一版的所有数字都是上面那两组套件的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -200,7 +211,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
         toolCallTimeoutMs: 180000
 ```
 
-然后**彻底退出 dsh 再打开**（配置只在启动时读一次）。新会话里说"列出 origin 开头的工具"应能看到 27 个 `mcp__origin_bridge__origin_*`。
+然后**彻底退出 dsh 再打开**（配置只在启动时读一次）。新会话里说"列出 origin 开头的工具"应能看到 28 个 `mcp__origin_bridge__origin_*`。
 
 > 三个必须对的点，都是踩过的坑：
 > 1. **必须以 `- insert:` 开头。** 直接写 `- id: 新名字` 是"覆盖下层已存在条目"的语法，对全新 id 会被 dsh **静默忽略**——症状就是改了配置、重启了、什么都没发生。
@@ -211,13 +222,14 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 
 不想用 `install_dsh.ps1` 也不用 npm 的话，可以把整个目录拷进 `<DSH_HOME>\profiles\<profile>\node_modules\dsh-origin-bridge\`，仓库自带的 `cordis.patch.yml` 就是 bundle 层补丁——但这只是方式 A 的手动等价物，路径与解释器仍靠 `ORIGIN_BRIDGE_HOME` / `ORIGIN_BRIDGE_PYTHON` 指定，正常情况请直接走方式 A。卡片图标与显示名来自 `icon.svg` 和 `locale/en.json`、`locale/zh.json`。
 
-## 工具（27 个）
+## 工具（28 个）
 
 | 工具 | 用途 |
 |---|---|
 | `origin_status` | 连接检查、Origin 版本、已开页面。**动手前先调它** |
 | `origin_read_file` | 只解析文件不碰 Origin：编码、分隔符、表头行、每列长名/单位/有效行数、**前 3 个原始值（`sample`，缺值为 null，用来抽查没串列）**；`.xls/.xlsx/.wks` 明确拒绝并让你改用 `origin_import`；`.bin` 走另一条路线给出技术/点数/方法参数/轴来源 |
 | `origin_import` | 导入 `.dat/.csv/.txt/.tsv/.xls/.xlsx/.wks` 和工作站二进制 `.bin`，返回 `ws-N` 句柄和列清单 |
+| `origin_read_sheet` | **import 的反向**：把工作表里的数据读回来——长名/单位/显示格式/列类型（numeric、text、mixed、empty）/有效行数，加前 `rows` 行（1–200）的值（缺值为 null）；给 `path` 就把整张表写成 csv/tsv/txt 并**回读核对**（表头、行数、每行格数、抽查格子），返回字节数与 sha256 |
 | `origin_write` | 内联数据建表：窄表 `columns={列名:[值…]}`，宽表 `headers`+`rows`（一次写完） |
 | `origin_formula` | 给列设计算公式（Fx）做派生列，读回算出的行数与首末值 |
 | `origin_plot` | 单条或**多条**曲线；`template` 走 Origin 自带图模；`graph`+`layer` 往指定层画 |
@@ -310,12 +322,22 @@ Origin Bridge 的做法：
 | `save_fig` 的 `width` | 传了也不生效：`save_fig(path)` 只有 path 时用页面尺寸，**必须同时给 type** 才认 width （实测 400 和 12000 导出都是 3216×2461、字节数相同）。我们的 `origin_export` 以前恰好只传 path | `save_fig(path, fmt, width=N)` + 缺文件时回退纯 path；PNG 导完比对 `dimensions.0` 与请求值，不一致就回 warning。题库宽度用例从"有 dimensions"改成**断言等于请求宽度** |
 | 非标准 JSON | `json.dumps` 默认把 inf/nan 写成裸 `Infinity`/`NaN`，那不是合法 JSON——dsh 侧整条响应解析失败，看起来像"桥挂了"而不是"一个数不对" | `sanitize()` 把 ±inf/nan 归 None；`server.py` 写出走 `allow_nan=False`，兜不住就降级成带原 id 的 JSON-RPC 错误；`smoke_test` 客户端用 `strict_loads` 拒绝，测试不会替产品掩盖它（`test_json_safety.py` 29 项，含幻觉工具名与未知方法的协议层断言） |
 | 关闭一个正被自动化的 Origin | Origin 拒绝并弹「正由另一个程序控制」的模态框；之后**所有** COM 调用在这个框后面排队，直到有人点确定——桥的表现就是连串 `com_timeout`（2026-11-08 实测复现：拟合进行中发 WM_CLOSE，弹出的框与用户截图逐字一致） | 桥按**正文文本**匹配这个框：超时路径先点掉再给 15 秒宽限，每次调用完成后顺手清一遍自己起的实例；`origin_instances` 会逐个报告弹窗，`origin_reclaim`/`origin_exit` 动手前先清障。其他对话框（保存提示、许可证）只报告、绝不代点——点错会丢工作 |
+| `WSheet.as_date(col, fmt)` / `as_time` | **会把整列数据毁掉**：2026-11-26 实测，一个数值列 `[45292.0, 45293.5, 45294.25]` 调完变成 `[nan, nan, nan]`，`D` 标签也变空（先调 `as_date` 再写值则值还在、但显示为空）。它做的是"把列改成日期类型并重设格式"，不是"把数字解释成日期" | **任何地方都不许调用**（全仓库零引用）。只想标一个显示格式就 `set_label(col, 'yyyy-MM-dd', 'D')`——实测这么写值不变，但列仍是 double，Origin 显示的还是原始数值，所以 `D` 标签只是"声明的格式"，别当成已生效的日期显示 |
+| Origin 自带的文本导出 `expASC` | 通过 `lt_exec` **完全走不通**：`expASC type:=0/1/2 path:="…"`、`path:=%(fname)`（配合 `set_lt_str`）、`path:=fname` 全部返回 False 且一个文件都不落（2026-11-26 实测六种写法）——是 `lt_exec` 那个"字符串参数一律返回 False"的老陷阱的同族 | 不从 Origin 导出数据：`origin_read_sheet` 用 `to_list` 取值、自己写字节，再回读核对（表头/行数/每行格数/抽查格子）。顺带好处：没有 `#` 被滤镜改名那套问题 |
+| 读回数据的三条 API | `to_list(col)` 给原始值（缺值是 `nan`、不是 None；文本列原样、前导零保留）；`cell(r,c)` 给**显示文字**（约 0.4 ms/次，抽样够用、整表太慢）；`to_list2(r1,r2,c1,c2)` 是有界块读。实测 20000×3 `to_list` 0.07 s、50000×3 整表写 CSV 0.40 s | `origin_read_sheet` 按这个分工设计：整表用 `to_list`、显示文字只取前 3 行 |
+| `set_label` 的参数顺序 | 是 `set_label(col, val, type='L')`，不是 `(col, type, val)`。写反了不报错，只是标签安静地变成 `'L'`（2026-11-26 踩到） | 一律 `set_label(i, 文本, 'L')`；`_sheet_info` 返回的 `get_label(i, 'D')` 才是显示格式 |
+| `op.exit()` | **只是"请求"，不一定生效**：2026-11-26 实测，做过一次 `_reset_connection` 之后再 `origin()` 重连，originpro 会**另外再拉起一个 Origin**（原来的那个继续无窗口跑着），于是 `op.exit()` 关掉新的、老的还在；8 秒后进程表里仍有它 | `origin_exit` 先验（`_wait_pid_gone`），确认不下来就对**本会话启动的**实例按 `origin_reclaim` 那套升级（先礼貌 taskkill，再强制），并在结果里写 `forced: true` 与实际 pid；不是自己启动的一律不动 |
+| `GLayer` 的曲线清单 | 没有 `.plots()` 这个方法（`dir()` 里只有 `plot_list` / `add_plot` / `remove_plot`）。写成 `len(l.plots())` 会被 `_safe` 吞成 0，于是 `origin_inspect` 对一张刚画好的图报"每层 0 条曲线"，模型据此以为图是空的并重画 | 一律 `len(l.plot_list())`。这类"吞异常返回默认值"的地方，0 与"读不到"必须分开 |
+| `powershell -Command "Get-Process X ..."` 的退出码 | **没有匹配的进程时它退出 1**（`$?` 为 false），stdout 与 stderr 都是空——2026-11-26 实测。"机器上没有 Origin"这个最常见的答案因此和一个真的 powershell 失败长得一模一样 | 探测脚本末尾写一个哨兵行并 `exit 0`；判定用「退出码 0 **且** 哨兵在」，不看裸退出码。踩过的具体后果：按退出码判失败 → `_process_rows` 返回 None → 会话不认领自己的实例 → `origin_exit` 全部误报 `foreign_instance` |
+| `cordis.patch.yml` 里的 profile 路径 | 写死 `profiles/desktop/...` 只在 desktop profile 成立；装进 `web` 或自定义 profile 时 python 打不开 server.py，`failOnStartupError: false` 把错误降级成 UI 看不到的一行日志，dsh 照常启动、**工具数为 0**，而插件卡片仍显示已安装（2026-11-26 在 dsh 0.2.2-rc.5 上实测） | `!!js` 表达式里用 `ctx.get('profileContext').dir`（宿主提供；dsh 自己的文档就写着 `!!js dshHomePath('sessions')`、`ctx.get('profileContext')` 都是合法用法）。`process.env.DSH_PROFILE` / `DSH_HOME` 宿主进程里拿不到，不能当主来源 |
 
 ## 已知边界
 
 - `originpro` 要求 Origin **2021+**。实测 OriginPro 2018C：能连、能存空工程，但导入返回 0 行、`add_plot` 直接打死连接器。
 - 非线性拟合需要 **OriginPro** 授权；标准版调 `origin_fit(kind='gauss')` 会明确报 `fit_function_unavailable`。
 - `.bin` 只覆盖 `80 F2 1B 00` 头的工作站导出；**EIS 的频率表在另一套参数里，所以 `.bin` 的 EIS 只有测量列**。Gamry / Autolab / Pine 等其它厂商二进制没做，也不猜。
+- **数据出去（`origin_read_sheet`）的两条实测边界**：① 带显示格式的列导出的是 Origin 的原始数值——日期/时间列是序列号（`1 = 1900-01-01`，`45292.0 = 2024-01-01`），不是屏幕上那段文字，工具会在 `warnings` 里点名哪几列、并给出前 3 行的显示文本（`sample_display`）；② Origin 自带的 `expASC` 通过 `lt_exec` 完全驱动不了（六种写法实测全返回 False 且不落盘），所以文件是桥自己按 `to_list` 的值写的——好处是没有 `#` 被滤镜改名那套问题，代价是"显示格式"不参与导出。整表回读核对覆盖表头、行数、每行格数与抽查格子，`op.exit()` 之外不依赖 Origin 的写出器。
+- **40 个科研预设里 11 个的图类型这条路径画不了**（box / ridgeline / radar / sankey / forest / matrix / heatmap / 3d_line / bubble / paired_line）：`origin_chart_render` 会明确报 `preset_kind_unsupported` 并指出该换哪个工具，**不会**再静默降级成折线（旧版正是这样把直方图交成折线、甚至交出一张空图还标 `verified`）。其余 29 个里有一部分只兑现主体——双 Y 轴、误差棒、对数轴、拟合叠加要另外用 `origin_layer` / `origin_fit` / `origin_style` 补，`warnings` 会逐条说明缺了什么。
 - 图例位置是"按数据坐标摆放"，对数轴上分数位置会偏；没有"避让数据点"的智能摆放。
 - 交付路径：中文目录、中文文件名、含空格、200+ 字符长路径、自动建多级目录、`tiff→tif`/`jpeg→jpg` 改名——2026-10-12 在真机上逐条实测可用（PNG/TIF/PDF/SVG/EMF 和 `.opju` 都试过）。**不行的是网络路径**：UNC 与未映射盘返回 `bad_path`，不去猜认证。另有两条 Origin 自己的怪脾气已经兜住：文件名里的 `#` 会被导出滤镜换成编号（桥发现后会改名回你要的名字并在 `warnings` 里说明），路径组件尾部的空格/点会被 Windows 悄悄截掉（桥先截一遍再比较，不会报"文件不存在"）。
 - 千分位和逗号分隔符同形的文件（不加引号的 `0,1,234.5`）没法机械还原：桥按最宽行补齐并报"行长度不一致"，不会假装列数对得上。欧陆小数点（`0,5`）只在分隔符是 `;` 或 tab 时才认。
@@ -332,7 +354,7 @@ Origin Bridge 的做法：
 
 | 现象 | 先查 |
 |---|---|
-| dsh 里看不到工具 | 配置是不是漏了 `- insert:`；`name:` 有没有写成 `@deepseek-ai/dsh-mcp-client`；有没有彻底退出重启 dsh；`python server.py --tools` 能否列出 27 个 |
+| dsh 里看不到工具 | 配置是不是漏了 `- insert:`；`name:` 有没有写成 `@deepseek-ai/dsh-mcp-client`；有没有彻底退出重启 dsh；`python server.py --tools` 能否列出 28 个 |
 | `connection_error` | Origin 是否 ≥2021；`pip show originpro`；任务管理器里 `Origin64.exe` 是否只有一个 |
 | 报"实例超过上限" | `origin_instances` 看有几个、哪些没窗口；`origin_reclaim` 关残留的后台实例；有窗口的那些要用户自己关（可能有未保存的东西） |
 | `import_empty` | 先 `origin_read_file` 看结构；空格/多行表头已由自研解析器处理，走到这个报错说明文件本身没有数值行 |
@@ -350,22 +372,30 @@ Origin Bridge 的做法：
 | 第一次 `origin_instances` 里 `ownership: "uncertain"` | 连接前的进程探测失败过（powershell 被杀软拦住/超时），本会话**不认领任何实例**，`origin_exit` 会因此报 `foreign_instance`。确认确实是桥自己拉起的实例，就用 `origin_exit(force=true)`；重启 dsh 后探测正常即恢复 |
 | `origin_close_pages(names=[])` 什么都没关 | 这是**故意的**：空列表 = 一个都没选中。要关该类型的全部页面请**省略** `names`，先用 `dry_run: true` 看一眼 `would_close` 更稳 |
 | 解释器找不到 / `origin-bridge` 一启动就退出（9009） | PATH 上第一个 `python` 常是 Windows 商店的"应用执行别名"（0 字节，一跑就 9009），把真解释器挡在后面。先跑 `node bin/origin-bridge.mjs --check` 看它选了谁、`import numpy/originpro` 是否 OK；用 `setx ORIGIN_BRIDGE_PYTHON "<真解释器路径>"` 指定即可。dsh 侧同理：`cordis.patch.yml` 的默认命令是 PATH 上的 `python` |
+| `unknown_arguments` | 参数名拼错了（`colour` 而不是 `color`、`xscale` 而不是 `x_scale`）。0.4.22 起这类键会被**明确拒绝**并列出可用参数——以前是被静默接受、什么也没改，看起来像调用成功 |
+| `plot_empty_column` | 指定的 y 列一个数值都没有（文本列或整列空）。以前会画出一张 0..10 的空图还报 `verified`。用 `origin_read_sheet` 看列里到底是什么 |
+| `preset_kind_unsupported` | 这个预设要的图类型 Origin 画不出来（box / radar / sankey / 3d…）。报错里会指出该用哪个工具（`origin_matrix` / `origin_layer`+`origin_plot` / `origin_fit`）。要折线/散点/柱状就直接传 `plot_type=` |
+| `linear_ignored_starts` | `origin_fit(kind="linear")` 没有"初值"这回事，`starts` 会被当成把参数**钉死**（旧行为），现在直接拒绝。要固定截距/斜率用 `fixed={"Intercept": 0}`；要初值用 `kind=nlfitsing` 的非线性拟合 |
+| 装好了但一个 origin 工具都没有（尤其非 desktop profile） | 先 `python check_patch.py` 验证补丁：`server.py` 的路径必须来自 `ctx.get('profileContext').dir`，写死 `profiles/desktop` 会让其它 profile 静默丢光工具。老版本（≤0.4.21）的补丁就是写死的，升级后需要重装或把那一行改掉 |
+| 安装器说"已经装过了"但工具没有 | ≤0.4.21 的 `install_dsh.ps1` 用整文件子串匹配 id，注释里出现 id 就算命中，于是它什么都没写就 `exit 0`。0.4.22 起改成按 YAML 行锚定，且每次写完都用 PyYAML 校验、失败自动从备份回滚 |
+| `client_check.py` 报 No module named 'mcp' | 那个检查用的是**官方 MCP SDK**，桥本身刻意不用它（原因见"设计取舍"）。只跑它需要 `python -m pip install "mcp>=1.0"`；不装也能用 `python smoke_test.py` 覆盖同样的协议面 |
 
 ## 给维护者
 
 ```
 dsh-origin-bridge/
-├── server.py            # 同步 stdio JSON-RPC，27 个工具的分发与 schema
+├── server.py            # 同步 stdio JSON-RPC，28 个工具的分发与 schema
 ├── originlab.py         # 引擎：COM 专用线程、句柄表、每个操作及其读回验证
 ├── asciiio.py           # 健壮的 ASCII 读取（分隔符嗅探 / GBK / 多行表头）
 ├── binio.py             # 工作站 .bin：单测量通道 + 方法参数重建电势轴
 ├── templates_catalog.py # 40 个科研图表预设（纯元数据）
-├── cordis.patch.yml     # dsh bundle 补丁（serverName: origin_bridge）
-├── install_dsh.ps1      # 一键装入 dsh（备份 + 写 profile 层 + 自检）
+├── cordis.patch.yml     # dsh bundle 补丁（serverName: origin_bridge，路径取 ctx.get('profileContext').dir）
+├── install_dsh.ps1      # 一键装入 dsh（备份 + 写 profile 层 + PyYAML 自检，失败自动回滚）
+├── check_patch.py       # 单独校验 profile 补丁（两个 insert 都在、profile 路径来自宿主）
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 614 项离线与单元检查（随包发布）
+└── test_*.py / smoke_test.py / edge_checks.py   # 777 项离线与单元检查（随包发布）
     （check_claims.py 重测各套件并核对两份 README 的覆盖数字，CI 也跑）
 ```
 
